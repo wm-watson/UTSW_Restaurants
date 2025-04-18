@@ -233,1866 +233,933 @@ da.food.filtered = da.food %>%
 #####################################################BREAK##################################################################################
 # Begin Will's Code----
 ## Classification----
+### NAICS/SIC Codes----
+library(tidyverse)
 
 dataaxle <- readxl::read_excel(dataaxle.path)
 
-food_classification <- dataaxle %>%
-  # First identify unhealthy establishments using NAICS and SIC codes
+# First create vectors of unhealthy and healthy codes
+unhealthy_naics <- c(
+  722513,  # Limited-service restaurants
+  722514,  # Cafeterias, buffets, grills
+  445120,  # Convenience stores
+  447110,  # Gas stations with convenience stores
+  311520,  # Ice cream manufacturing
+  445292,  # Confectionery and nut stores
+  311330,  # Confectionery manufacturing
+  311821,  # Cookie and cracker manufacturing
+  722410,  # Drinking places
+  454210   # Vending machine operators
+)
+
+unhealthy_sic <- c(
+  5812,    # Fast-food restaurants and pizza places
+  5411,    # Convenience stores
+  5441,    # Candy and confectionery stores
+  5813,    # Drinking places
+  2024,    # Ice cream manufacturing
+  5451,    # Dairy and ice cream stores
+  5962,    # Automatic merchandising machine operators
+  55401    # Service Stations - Gasoline and Oil
+)
+
+healthy_naics <- c(
+  445230,  # Fruit and vegetable markets
+  445210,  # Meat markets
+  445220,  # Fish and seafood markets
+  445110,  # Supermarkets and full-service grocery
+  446191,  # Food supplement stores
+  445299,  # All other specialty food stores
+  311411,  # Frozen fruit/vegetable manufacturing
+  311421   # Fruit and vegetable canning
+)
+
+healthy_sic <- c(
+  5431,    # Fruit and vegetable markets
+  5421,    # Meat and fish markets
+  5499,    # Health food stores
+  2033,    # Canned fruits and vegetables
+  2034     # Dehydrated fruits, vegetables, soups
+)
+
+dataaxle <- dataaxle %>%
   mutate(
-    is_unhealthy = case_when(
-      # NAICS codes for unhealthy establishments
-      grepl("445120", `Primary NAICS`) ~ TRUE,  # 445120: Convenience Stores
-      grepl("722410", `Primary NAICS`) ~ TRUE,  # 722410: Drinking Places (Alcoholic Beverages)
-      
-      # SIC codes for unhealthy establishments
-      `Primary SIC Code` %in% c(541103) ~ TRUE, # 541103: Convenience Stores
-      `Primary SIC Code` %in% c(581225, 581301, 581222, 581219) ~ TRUE, # 581225: Ice Cream/Frozen Yogurt Stands
-      # 581301: Bars
-      # 581222: Pizza Restaurants
-      # 581219: BBQ Restaurants
-      # Check for BBQ in names regardless of code
-      grepl("bbq|barbecue|bar-b-q|bar-b-que|barbeque", tolower(`Company Name`)) ~ TRUE,
-      
-      TRUE ~ FALSE
-    )
-  ) %>%
-  # Create limited service indicator
-  mutate(
-    is_limited_service = case_when(
-      grepl("722513", `Primary NAICS`) ~ TRUE,  # 722513: Limited-Service Restaurants
-      `Primary SIC Code` %in% c(581208) ~ TRUE,  # 581208: Fast-Food Restaurants
-      TRUE ~ FALSE
-    )
-  ) %>%
-  # Main classification with unhealthy taking precedence
-  mutate(food_category = case_when(
-    # Unhealthy categories take precedence
-    is_unhealthy ~ "unhealthy",
-    
-    # Then check for healthy categories
-    grepl("445210|445230|445110", `Primary NAICS`) ~ "healthy", 
-    # 445210: Meat Markets
-    # 445230: Fruit and Vegetable Markets
-    # 445110: Supermarkets and Grocery Stores
-    
-    grepl("445299", `Primary NAICS`) ~ "healthy", # 445299: All Other Specialty Food Stores
-    
-    `Primary SIC Code` %in% c(541101, 541102, 541105) ~ "healthy",
-    # 541101: Health Food Stores
-    # 541102: Diet Food Centers
-    # 541105: Grocery Stores
-    
-    `Primary SIC Code` %in% c(543101, 543102, 543103) ~ "healthy",
-    # 543101: Fruit and Vegetable Markets
-    # 543102: Produce Markets
-    # 543103: Farmers Markets
-    
-    # Limited service evaluation combining codes AND names
-    is_limited_service & grepl("salad|bowl|poke|mediterranean|sushi|vegetarian|vegan", 
-                               tolower(`Company Name`)) ~ "healthy",
-    is_limited_service & grepl("smoothie|juice|sandwich|subway|fresh|health", 
-                               tolower(`Company Name`)) ~ "moderately_healthy",
-    is_limited_service & grepl("pizza|burger|fries|wings|fried|chicken|taco|fast food|chinese buffet|ice cream|dessert|donut|candy", 
-                               tolower(`Company Name`)) ~ "unhealthy",
-    is_limited_service ~ "needs_detailed_scoring",
-    
-    TRUE ~ "needs_review"
-  )) %>%
-  # Detailed scoring for remaining limited service restaurants
-  mutate(health_score = case_when(
-    food_category == "healthy" ~ 2,
-    food_category == "moderately_healthy" ~ 1,
-    food_category == "unhealthy" ~ -2,
-    food_category == "needs_detailed_scoring" ~ 0, # baseline for further scoring
-    TRUE ~ 0
-  )) %>%
-  # Additional scoring layers for "needs_detailed_scoring" category
-  mutate(
-    detailed_score = case_when(
-      food_category != "needs_detailed_scoring" ~ 0,
-      # Menu type indicators in name
-      grepl("grill|deli|cafe|bistro", tolower(`Company Name`)) ~ 0.5,
-      grepl("express|drive|thru|drive-thru", tolower(`Company Name`)) ~ -0.5,
-      
-      # Cuisine type indicators
-      grepl("asian|thai|vietnamese|indian|mediterranean", tolower(`Company Name`)) ~ 0.5,
-      grepl("tex-mex|bbq|barbecue|bar-b-q", tolower(`Company Name`)) ~ -0.5,
-      
-      # Secondary business characteristics
-      grepl("family|traditional|home", tolower(`Company Name`)) ~ 0.3,
-      grepl("quick|fast|speedy", tolower(`Company Name`)) ~ -0.3,
-      
-      TRUE ~ 0
+    # Check if any NAICS codes are unhealthy
+    has_unhealthy_naics = if_any(
+      starts_with("NAICS"), 
+      ~. %in% unhealthy_naics
     ),
     
-    # Consider secondary NAICS/SIC codes
-    secondary_code_score = case_when(
-      food_category != "needs_detailed_scoring" ~ 0,
-      grepl("445|446", `NAICS 2`) ~ 0.5,  # Food/Health stores as secondary
-      grepl("722513", `NAICS 2`) ~ -0.5,  # Additional limited-service indicators
-      `SIC Code 2` %in% c(581208, 581222) ~ -0.5, # Additional fast food indicators
-      TRUE ~ 0
+    # Check if any SIC codes are unhealthy
+    has_unhealthy_sic = if_any(
+      starts_with("SIC Code"), 
+      ~. %in% unhealthy_sic
+    ),
+    
+    # Check if any NAICS codes are healthy
+    has_healthy_naics = if_any(
+      starts_with("NAICS"), 
+      ~. %in% healthy_naics
+    ),
+    
+    # Check if any SIC codes are healthy
+    has_healthy_sic = if_any(
+      starts_with("SIC Code"), 
+      ~. %in% healthy_sic
+    ),
+    
+    # Final classification
+    food_health_status = case_when(
+      # If any code is unhealthy, classify as unhealthy
+      has_unhealthy_naics | has_unhealthy_sic ~ "unhealthy",
+      
+      # If no unhealthy codes and has healthy codes, classify as healthy
+      (has_healthy_naics | has_healthy_sic) ~ "healthy",
+      
+      # Otherwise keep as needs_review
+      TRUE ~ "needs_review"
     )
   ) %>%
-  # Calculate final score for detailed scoring cases
+  # Clean up intermediate columns
+  select(-has_unhealthy_naics, -has_unhealthy_sic, -has_healthy_naics, -has_healthy_sic)
+
+## NLP: Unigrams, bigrams, and trigrams----
+library(tidytext)
+library(stringr)
+library(janitor)
+
+# Convert all column names to snake case
+dataaxle <- dataaxle %>%
+  clean_names()
+
+# Custom stop words relevant to business names
+business_stop_words <- c(
+  "inc", "llc", "ltd", "corp", "corporation", "co", "company",
+  "the", "and", "of", "&", "in", "at", "by", "for", "to", "a", "an"
+)
+
+# Process business names and create n-grams
+name_analysis <- dataaxle %>%
+  filter(food_health_status == "needs_review") %>%
+  # Clean and standardize names
   mutate(
-    final_health_score = case_when(
-      food_category == "needs_detailed_scoring" ~ 
-        health_score + 
-        (detailed_score * 0.6) +     # Higher weight on detailed name analysis
-        (secondary_code_score * 0.4), # Lower weight on secondary codes
-      food_category == "healthy" ~ 2,
-      food_category == "moderately_healthy" ~ 1,
-      food_category == "unhealthy" ~ -2,
-      TRUE ~ 0
-    )
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
   ) %>%
-  # Final classification
-  mutate(final_category = case_when(
-    food_category %in% c("healthy", "moderately_healthy", "unhealthy") ~ food_category,
-    final_health_score >= 1.5 ~ "healthy",
-    final_health_score >= 0 & final_health_score < 1.5 ~ "moderately_healthy",
-    final_health_score < 0 & final_health_score > -1.5 ~ "moderately_unhealthy",
-    final_health_score <= -1.5 ~ "unhealthy",
-    TRUE ~ "needs_review"
-  ))
-
-## Summaries----
-summary_all <- food_classification %>%
-  group_by(food_category, final_category) %>%
+  # Create separate records for unigrams, bigrams, and trigrams
+  unnest_tokens(ngram, clean_name, token = "ngrams", n = 1) %>%
+  filter(!ngram %in% business_stop_words) %>%
+  group_by(ngram) %>%
   summarise(
-    count = n(),
-    pct_total = round(n() / nrow(food_classification) * 100, 1),
-    .groups = 'drop'
+    unigram_count = n(),
+    example_names = paste(head(company_name, 3), collapse = "; ")
   ) %>%
-  arrange(food_category, final_category)
+  arrange(desc(unigram_count))
 
-# Focus on needs_review cases
-review_cases_detailed <- food_classification %>%
-  filter(food_category == "needs_review") %>%
-  select(
-    `Company Name`, 
-    `Primary NAICS`, 
-    `Primary NAICS Description`,
-    `Primary SIC Code`, 
-    `Primary SIC Description`,
-    food_category,
-    final_category,
-    final_health_score
-  ) %>%
-  distinct() %>%
-  arrange(`Company Name`)
-
-# Get NAICS/SIC patterns in review cases
-code_patterns_in_review <- food_classification %>%
-  filter(food_category == "needs_review") %>%
-  group_by(`Primary NAICS`, `Primary NAICS Description`) %>%
-  summarise(
-    count = n(),
-    pct_of_review = round(n() / sum(food_category == "needs_review") * 100, 1),
-    common_names = paste(head(unique(`Company Name`), 3), collapse = "; "),
-    .groups = 'drop'
-  ) %>%
-  arrange(desc(count))
-
-# How review cases were ultimately classified
-review_resolution <- food_classification %>%
-  filter(food_category == "needs_review") %>%
-  group_by(final_category) %>%
-  summarise(
-    count = n(),
-    pct_of_review = round(n() / sum(food_category == "needs_review") * 100, 1),
-    example_businesses = paste(head(unique(`Company Name`), 3), collapse = "; "),
-    .groups = 'drop'
-  ) %>%
-  arrange(desc(count))
-
-# Print results
-print("Overall Classification Summary:")
-print(summary_all)
-
-print("\nNAICS/SIC Patterns in Review Cases:")
-print(code_patterns_in_review)
-
-print("\nFinal Resolution of Review Cases:")
-print(review_resolution)
-
-print("\nDetailed List of Review Cases:")
-print(review_cases_detailed)
-
-
-refined_classification <- food_classification %>%
-  # Remove NAs
-  filter(!is.na(`Primary NAICS`), 
-         !is.na(`Primary SIC Code`)) %>%
-  # Filter out transportation/transit/ambulance services AND caterers
-  filter(!grepl("Transit|Transportation|Ambulance|Limousine|Bus|Rail|Special Needs|Sightseeing|Caterer", 
-                `Primary NAICS Description`)) %>%
-  filter(!grepl("Transit|Transportation|Ambulance|Limousine|Bus|Rail|Special Needs|Sightseeing|Caterer", 
-                `Primary SIC Description`)) %>%
-  # Update food_category for gas stations
+bigram_analysis <- dataaxle %>%
+  filter(food_health_status == "needs_review") %>%
   mutate(
-    food_category = case_when(
-      # Add gas stations to unhealthy category
-      grepl("Gasoline|Gas Station", `Primary NAICS Description`) | 
-        grepl("Gasoline|Gas Station", `Primary SIC Description`) ~ "unhealthy",
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
+  ) %>%
+  unnest_tokens(ngram, clean_name, token = "ngrams", n = 2) %>%
+  # Remove bigrams containing stop words
+  filter(!str_detect(ngram, paste(business_stop_words, collapse = "|"))) %>%
+  group_by(ngram) %>%
+  summarise(
+    bigram_count = n(),
+    example_names = paste(head(company_name, 3), collapse = "; ")
+  ) %>%
+  arrange(desc(bigram_count))
+
+trigram_analysis <- dataaxle %>%
+  filter(food_health_status == "needs_review") %>%
+  mutate(
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
+  ) %>%
+  unnest_tokens(ngram, clean_name, token = "ngrams", n = 3) %>%
+  # Remove trigrams containing stop words
+  filter(!str_detect(ngram, paste(business_stop_words, collapse = "|"))) %>%
+  group_by(ngram) %>%
+  summarise(
+    trigram_count = n(),
+    example_names = paste(head(company_name, 3), collapse = "; ")
+  ) %>%
+  arrange(desc(trigram_count))
+
+# Print top results
+print("Top 20 single words:")
+print(head(name_analysis, 20))
+
+print("\nTop 20 bigrams:")
+print(head(bigram_analysis, 20))
+
+print("\nTop 20 trigrams:")
+print(head(trigram_analysis, 20))
+
+# Create a summary of potential classification patterns
+potential_patterns <- bind_rows(
+  name_analysis %>% 
+    head(50) %>% 
+    mutate(type = "unigram"),
+  bigram_analysis %>% 
+    head(50) %>% 
+    mutate(type = "bigram"),
+  trigram_analysis %>% 
+    head(50) %>% 
+    mutate(type = "trigram")
+)
+
+# Define all classification terms
+unhealthy_terms <- c(
+  # Fast food and chains
+  "sonic drive", "wendy", "chick fil", "church s chicken",
+  "popeye", "chuck e cheese", "burger", "mcdonald", "subway",
+  "pizza", "krispy krunchy", "golden chick",
+  "hong kong express", "oriental express", "ice cream", "wing", "donut", "donuts",
+  "fast food", "drive in", "drive thru",
+  "dairy queen", "jack in the box", "whataburger", "carl s jr", "arby s",
+  "raising cane", "five guys", "shake shack", "white castle", "braum s",
+  "culver s", "hardee s", "krystal", "checkers", "rally s",
+  
+  # Casual dining chains
+  "applebee s", "chili s", "tgi friday", "buffalo wild wings", "hooters",
+  "twin peaks", "dave buster", "peter piper", "cicis", "little caesars",
+  "olive garden", "red lobster", "outback", "texas roadhouse",
+  "cracker barrel", "golden corral", "perkins", "red robin",
+  "famous dave", "tony roma", "logan s", "longhorn",
+  
+  # BBQ variations
+  "bbq", "bar b q", "bar-b-q", "barbecue", "barbeque", "smokehouse", "smoke house",
+  "smoker", "pit bbq", "bar b que", "bar-b-que",
+  
+  # Mexican restaurant indicators
+  "mexican", "taqueria", "taco", "cantina", "tex mex", "tex-mex",
+  "jalisco", "guadalajara", "el rey",
+  
+  # Bar/pub variations
+  "sports bar", "grill bar", "bar grill", "bar & grill",
+  "pub", "tavern", "saloon", "lounge", "beer garden",
+  "draft house", "draught house", "brew house", "brewing co",
+  "brewery", "ale house", "tap house", "taphouse", "beer garden",
+  "draft haus", "draught haus", "brauhaus", "hofbrau",
+  "beer hall", "public house",
+  "icehouse", "ice house", "cocktail", "cocktails", "drinks",
+  "nightclub", "night club", "dancing", "karaoke", "cantina",
+  
+  # Restaurant/diner terms
+  "diner", "cafe", "cafeteria", "grill", "steakhouse", "steak house",
+  "pancake", "waffle house", "ihop", "dennys", "denny s",
+  "buffet", "all you can eat", "ayce", "hibachi", "asian buffet",
+  "chinese buffet", "sushi buffet", "mongolian",
+  
+  # Dessert/treat shops
+  "baskin robbins", "dairy queen", "cold stone", "marble slab",
+  "frozen yogurt", "yogurt shop", "froyo", "tcby", "gelato",
+  "sweet shop", "candy shop", "candies", "confectionery",
+  "cookie shop", "cookies", "bakery", "cinnabon", "dunkin",
+  "dairy bar", "ice cream shop", "custard", "andy s frozen",
+  "rita s ice", "carvel", "dippin dots", "haagen", "ben jerry",
+  "cold stone", "braum s",
+  
+  # Snack shops
+  "pretzel", "auntie anne", "wetzel pretzel", "snack bar", "snack shop",
+  "popcorn shop", "nuts", "peanuts", "candy store",
+  
+  # Gas station/convenience store terms
+  "quick shop", "quik shop", "kwik shop", "quick stop", "quick mart",
+  "food mart", "mini mart", "ez mart", "ezy mart", "7 eleven",
+  "7-eleven", "circle k", "corner store", "gas n go", "pak a sac",
+  "stop n go", "stop & go", "food store", "quick stop", "quick way",
+  "speedy stop", "super stop", "flash foods", "hop in",
+  
+  # Snack/beverage places
+  "coffee shop", "coffee house", "coffee bar", "starbucks", "caribou coffee",
+  "peet s coffee", "dunkin donuts", "krispy kreme", "smoothie king",
+  "jamba juice", "tropical smoothie", "bubble tea", "boba tea",
+  
+  # Specifically fried seafood/chicken terms
+  "fried fish", "fish fry", "fried seafood", "fried shrimp",
+  "fried chicken", "chicken fried", "captain d", "long john silver",
+  
+  # Additional chains and restaurants from n-grams
+  "schlotzsky", "which wich", "jersey mike", "firehouse subs",
+  "pho que huong", "fish city grill", "red hot blue",
+  "moe s southwest", "crispy chicken", "rice bowl express",
+  "golden wok", "china wok", "china star", "china garden", "china buffet",
+  "china king", "china one", "china house", "panda express",
+  "great wall", "happy wok", "lucky wok", "new wok", "wok n roll",
+  
+  # Additional café/restaurant terms
+  "bistro", "chophouse", "chop house", "eatery", "kitchen",
+  "deli", "delicatessen", "sandwich shop", "sub shop", "sub house",
+  "pizzeria", "trattoria", "osteria", "restaurant", "dining",
+  "place to eat", "family restaurant",
+  
+  # Additional convenience store terms
+  "shell food mart", "texaco food mart", "chevron food mart",
+  "conoco food mart", "exxon food mart", "valero food mart",
+  "phillips food mart", "citgo food mart",
+  "shell station", "texaco station", "chevron station",
+  "conoco station", "exxon station", "valero station",
+  "phillips station", "citgo station",
+  
+  # Additional snack/beverage terms
+  "tea house", "tea shop", "tea bar", "bubble tea", "boba tea",
+  "snow ice", "shaved ice", "ice cream parlor", "creamery",
+  "sweet treats", "sweet spot", "candy corner", "candy shop",
+  "snacks", "treats",
+  
+  # Additional restaurant terms from remaining review
+  "china inc", "china cafe", "china palace", "china taste",
+  "golden china", "hong kong", "jade", "lucky china",
+  "panda", "peking", "royal china", "szechuan", "wok",
+  
+  # Additional service station terms
+  "stop n shop", "quick stop", "one stop", "pit stop",
+  "food n fuel", "grab n go", "on the go", "convenience",
+  "express mart", "star mart", "fuel mart", "star stop",
+  "fuel stop", "petro stop", "travel stop", "truck stop",
+  
+  # Additional catering terms that typically indicate unhealthy food
+  "bbq catering", "taco catering", "party catering",
+  "event catering", "catering service", "catering services",
+  "catering co", "catering company"
+)
+
+# Terms that indicate healthy establishments
+healthy_terms <- c(
+  # Healthy bar terms
+  "juice bar", "smoothie bar", "salad bar", "acai bar", "health bar",
+  
+  # Healthy chicken/seafood terms
+  "pollo asado", "pollo a la brasa", "grilled chicken",
+  "rotisserie chicken", "seafood market", "fish market",
+  "mariscos", "del mar", "pescado", "ceviche",
+  
+  # Health food stores/restaurants
+  "vegan", "vegetarian", "health food", "organic", "natural foods",
+  "fresh market", "farmers market", "produce market",
+  
+  # Additional healthy restaurant indicators
+  "poke", "sushi", "salad", "mediterranean", "greek",
+  
+  # Additional healthy terms
+  "farm to table", "farm to fork", "fresh kitchen", "clean eats",
+  "healthy eats", "raw food", "whole food", "plant based",
+  
+  # Specific healthy chains/types
+  "sweetgreen", "chopt", "tender greens", "true food kitchen",
+  "seasons 52", "zoes kitchen", "cava", "panera",
+  
+  # Health food stores
+  "vitamin shop", "nutrition store", "supplement shop",
+  "whole foods", "trader joe", "sprouts", "natural grocers",
+  
+  # Additional healthy establishments
+  "fish market", "farmers market", "produce market",
+  "health foods", "health store", "nutrition center",
+  "wellness center", "fitness center", "workout",
+  "gym", "cross fit", "crossfit", "yoga studio",
+  "pilates", "martial arts",
+  
+  # Additional healthy restaurant terms
+  "raw bar", "oyster bar", "poke bowl", "acai bowl",
+  "salad works", "salad factory", "green kitchen",
+  "fresh kitchen", "fresh eats", "fresh foods",
+  "natural cafe", "natural kitchen", "natural foods",
+  "organic cafe", "organic kitchen", "organic foods",
+  
+  # Additional healthy catering terms
+  "organic catering", "fresh catering", "healthy catering",
+  "farm to table catering", "vegan catering", "vegetarian catering",
+  "whole foods catering", "wellness catering"
+)
+
+# Update classification with more specific rules
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
       # Keep existing classifications
-      TRUE ~ food_category
-    )
-  ) %>%
-  # Recalculate health scores based on updated categories
-  mutate(health_score = case_when(
-    food_category == "healthy" ~ 2,
-    food_category == "moderately_healthy" ~ 1,
-    food_category == "unhealthy" ~ -2,
-    food_category == "needs_detailed_scoring" ~ 0,
-    TRUE ~ 0
-  )) %>%
-  # Keep existing detailed scoring
-  mutate(
-    detailed_score = case_when(
-      food_category != "needs_detailed_scoring" ~ 0,
-      grepl("grill|deli|cafe|bistro", tolower(`Company Name`)) ~ 0.5,
-      grepl("express|drive|thru|drive-thru", tolower(`Company Name`)) ~ -0.5,
-      grepl("asian|thai|vietnamese|indian|mediterranean", tolower(`Company Name`)) ~ 0.5,
-      grepl("tex-mex|bbq|barbecue|bar-b-q", tolower(`Company Name`)) ~ -0.5,
-      grepl("family|traditional|home", tolower(`Company Name`)) ~ 0.3,
-      grepl("quick|fast|speedy", tolower(`Company Name`)) ~ -0.3,
-      TRUE ~ 0
-    ),
-    secondary_code_score = secondary_code_score  # Keep existing secondary code scores
-  ) %>%
-  # Recalculate final health score
-  mutate(
-    final_health_score = case_when(
-      food_category == "needs_detailed_scoring" ~ 
-        health_score + 
-        (detailed_score * 0.6) +
-        (secondary_code_score * 0.4),
-      food_category == "healthy" ~ 2,
-      food_category == "moderately_healthy" ~ 1,
-      food_category == "unhealthy" ~ -2,
-      TRUE ~ 0
-    )
-  ) %>%
-  # Recalculate final category
-  mutate(
-    final_category = case_when(
-      food_category %in% c("healthy", "moderately_healthy", "unhealthy") ~ food_category,
-      final_health_score >= 1.5 ~ "healthy",
-      final_health_score >= 0 & final_health_score < 1.5 ~ "moderately_healthy",
-      final_health_score < 0 & final_health_score > -1.5 ~ "moderately_unhealthy",
-      final_health_score <= -1.5 ~ "unhealthy",
+      food_health_status != "needs_review" ~ food_health_status,
+      
+      # First check for healthy exceptions
+      str_detect(tolower(company_name), 
+                 paste(healthy_terms, collapse = "|")) ~ "healthy",
+      
+      # Then check for unhealthy terms
+      str_detect(tolower(company_name), 
+                 paste(unhealthy_terms, collapse = "|")) ~ "unhealthy",
+      
+      # Generic "bar" term (not caught in healthy exceptions)
+      str_detect(tolower(company_name), "bar|draft|draught") ~ "unhealthy",
+      
+      # Additional NAICS-based rules
+      primary_naics_description == "Drinking Places (Alcoholic Beverages)" ~ "unhealthy",
+      primary_naics_description == "Snack And Nonalcoholic Beverage Bars" & 
+        !str_detect(tolower(company_name), paste(healthy_terms, collapse = "|")) ~ "unhealthy",
+      
+      # Remove transportation-related businesses
+      primary_naics_description %in% c(
+        "All Other Transit And Ground Passenger Transportation",
+        "Other Urban Transit Systems",
+        "Special Needs Transportation",
+        "Commuter Rail Systems",
+        "Scenic And Sightseeing Transportation, Land"
+      ) ~ NA_character_,
+      
+      # Generic rules for remaining common categories
+      primary_naics_description == "Limited-Service Restaurants" ~ "unhealthy",
+      
+      # Specific rules for catering
+      primary_naics_description == "Caterers" & 
+        !str_detect(tolower(company_name), paste(healthy_terms, collapse = "|")) ~ "unhealthy",
+      
+      # Keep others as needs_review
       TRUE ~ "needs_review"
     )
   )
 
-review_cases <- refined_classification %>%
-  filter(food_category %in% c("needs_review", "needs_detailed_scoring")) %>%
-  select(Company_Name = `Company Name`, 
-         NAICS_Desc = `Primary NAICS Description`,
-         SIC_Desc = `Primary SIC Description`,
-         food_category,
-         final_category,
-         health_score,
-         detailed_score,
-         secondary_code_score,
-         final_health_score) %>%
-  arrange(food_category, final_category)
+# Get updated summaries
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n())
 
-# Summary of how these cases were ultimately categorized
-resolution_summary <- review_cases %>%
-  group_by(food_category, final_category) %>%
-  summarise(count = n(), .groups = 'drop')
-
-print("Resolution Summary:")
-print(resolution_summary)
-
-print("\nSample of review cases:")
-print(head(review_cases, 20))
-
-## More Refinement----
-
-review_cases_updated <- refined_classification %>%
-  filter(food_category %in% c("needs_review", "needs_detailed_scoring")) %>%
-  mutate(
-    new_classification = case_when(
-      # Healthy terms
-      grepl("mediterr?an(ean)?|green|fresh", tolower(`Company Name`)) ~ "healthy",
-      
-      # Unhealthy terms - breads and sweets
-      grepl("bread|brown(ie)?s|cookie(s)?", tolower(`Company Name`)) ~ "unhealthy",
-      
-      # Unhealthy - regional cuisine indicators
-      grepl("country|southern|the[- ]south", tolower(`Company Name`)) ~ "unhealthy",
-      
-      # Unhealthy - specific foods
-      grepl("cheese[- ]?steak|cheez[- ]?steak", tolower(`Company Name`)) ~ "unhealthy",
-      grepl("\\bcheese\\b|bacon", tolower(`Company Name`)) ~ "unhealthy", # changed to word boundary
-      
-      # Unhealthy - beverages
-      grepl("soda[- ]?(fountain)?", tolower(`Company Name`)) ~ "unhealthy",
-      
-      # Unhealthy - wings variations
-      grepl("hot[- ]?wings?|chicken[- ]?wings?|hot[- ]?wangs?|wings?", tolower(`Company Name`)) ~ "unhealthy",
-      
-      # Bars and delis
-      grepl("\\bbar\\b|[^-]deli\\b", tolower(`Company Name`)) ~ "unhealthy",
-      
-      TRUE ~ NA_character_  # Keep existing classification if no new match
-    )
-  ) %>%
-  mutate(
-    # Update food_category and final_category only if we have a new classification
-    food_category = if_else(!is.na(new_classification), new_classification, food_category),
-    final_category = if_else(!is.na(new_classification), new_classification, final_category)
-  ) %>%
-  select(-new_classification)  # Remove temporary classification column
-
-# Check the results
-summary_changes <- review_cases_updated %>%
-  group_by(food_category, final_category) %>%
+remaining_review <- dataaxle %>%
+  filter(food_health_status == "needs_review") %>%
+  group_by(primary_naics_description) %>%
   summarise(
     count = n(),
-    example_names = paste(head(unique(`Company Name`), 3), collapse = "; "),
-    .groups = 'drop'
+    example_names = paste(head(company_name, 3), collapse = "; ")
+  ) %>%
+  arrange(desc(count))
+
+# Update classification to flag the specific non-target businesses from the results
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
+      primary_naics_description %in% c(
+        "Limousine Service",
+        "All Other Transit And Ground Passenger Transportat",
+        "NA",
+        "Food Service Contractors",
+        "Ambulance Services",
+        "Interurban And Rural Bus Transportation"
+      ) ~ "flag_for_potential_removal",
+      
+      # Keep existing classifications
+      TRUE ~ food_health_status
+    )
   )
+
+# Get updated summary
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n())
+
+# Get summary of remaining needs_review cases
+remaining_review <- dataaxle %>%
+  filter(food_health_status == "needs_review") %>%
+  group_by(primary_naics_description) %>%
+  summarise(
+    count = n(),
+    example_names = paste(head(company_name, 3), collapse = "; ")
+  ) %>%
+  arrange(desc(count))
+
+print("Classification Summary:")
+print(classification_summary)
+
+print("\nRemaining categories needing review:")
+print(remaining_review)
+
+# Examine NA records
+na_analysis <- dataaxle %>%
+  filter(is.na(primary_naics_description)) %>%
+  group_by(primary_naics, primary_sic_code, primary_sic_description) %>%
+  summarise(
+    count = n(),
+    example_names = paste(head(company_name, 3), collapse = "; ")
+  ) %>%
+  arrange(desc(count))
+
+print("Analysis of NA NAICS records:")
+print(na_analysis)
+
+# Let's also look at secondary NAICS codes for these records
+na_secondary_naics <- dataaxle %>%
+  filter(is.na(primary_naics_description)) %>%
+  select(company_name, 
+         naics_1, naics_1_description,
+         naics_2, naics_2_description,
+         naics_3, naics_3_description) %>%
+  filter(!is.na(naics_1) | !is.na(naics_2) | !is.na(naics_3))
+
+print("\nSecondary NAICS codes for NA records:")
+print(na_secondary_naics)
+
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
+      # Keep existing non-NA classifications
+      !is.na(food_health_status) & food_health_status != "needs_review" ~ food_health_status,
+      
+      # For NA primary_naics_description records:
+      is.na(primary_naics_description) & (
+        # If it has a restaurant/food service NAICS code
+        naics_1_description %in% c("Full-Service Restaurants") |
+          naics_2_description %in% c("Full-Service Restaurants") |
+          naics_3_description %in% c("Full-Service Restaurants") |
+          # Or if it has a food service SIC code
+          primary_sic_code %in% c(581209, 581224, 581219, 581214, 581223)
+      ) ~ "needs_review",  # Keep these for further food classification
+      
+      # Flag non-food related NA records
+      is.na(primary_naics_description) ~ "flag_for_potential_removal",
+      
+      # Keep other existing classifications
+      TRUE ~ food_health_status
+    )
+  )
+
+# Get updated summary
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n())
 
 print("Updated Classification Summary:")
-print(summary_changes)
+print(classification_summary)
 
-# Show examples of newly classified establishments
-print("\nNewly Classified Examples:")
-newly_classified <- review_cases_updated %>%
-  filter(food_category %in% c("healthy", "unhealthy")) %>%
-  select(`Company Name`, food_category, final_category)
-print(head(newly_classified, 20))
+# Look at the NA records
+na_records <- dataaxle %>%
+  filter(is.na(food_health_status)) %>%
+  select(company_name, 
+         primary_naics, primary_naics_description,
+         primary_sic_code, primary_sic_description,
+         naics_1, naics_1_description,
+         naics_2, naics_2_description) %>%
+  arrange(company_name)
 
-# Summary of changes
-summary_changes <- review_cases_updated %>%
-  group_by(food_category, final_category) %>%
-  summarise(
-    count = n(),
-    example_names = paste(head(unique(`Company Name`), 3), collapse = "; "),
-    .groups = 'drop'
+print("Records with NA food_health_status:")
+print(na_records, n=Inf)
+
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
+      # Update NA records to flag_for_potential_removal
+      is.na(food_health_status) ~ "flag_for_potential_removal",
+      # Keep all other existing classifications
+      TRUE ~ food_health_status
+    )
   )
 
-print("\nUpdated Classification Summary:")
-print(summary_changes)
+# Verify the update
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n())
 
+print("Updated Classification Summary:")
+print(classification_summary)
 
-review_needed <- refined_classification %>%
-  filter(food_category %in% c("needs_review", "needs_detailed_scoring") |
-           final_category %in% c("healthy", "moderately_healthy")) %>%
+#Look at gas stations needing review
+gas_stations_review <- dataaxle %>%
+  filter(
+    primary_naics_description == "Other Gasoline Stations",
+    food_health_status == "needs_review"
+  ) %>%
   select(
-    `Company Name`, 
-    # Primary codes
-    `Primary NAICS`, `Primary NAICS Description`,
-    `Primary SIC Code`, `Primary SIC Description`,
-    # Secondary codes
-    `NAICS 2`, `NAICS 2 Description`,
-    `SIC Code 2`, `SIC Code 2 Description`,
-    # Tertiary codes
-    `NAICS 3`, `NAICS 3 Description`,
-    `SIC Code 3`, `SIC Code 3 Description`,
-    food_category,
-    final_category
+    company_name,
+    primary_naics_description,
+    primary_sic_code,
+    primary_sic_description
   ) %>%
-  arrange(`Company Name`)
+  arrange(company_name)
 
-# Summary stats
-print("Distribution by food_category:")
-print(table(review_needed$food_category))
-
-print("\nDistribution by final_category:")
-print(table(review_needed$final_category))
-
-# Look at code patterns for healthy/moderately healthy places
-healthy_patterns <- review_needed %>%
-  filter(final_category %in% c("healthy", "moderately_healthy")) %>%
-  group_by(`Primary NAICS Description`, `Primary SIC Description`) %>%
-  summarise(
-    count = n(),
-    example_names = paste(head(unique(`Company Name`), 3), collapse = "; "),
-    final_cats = paste(unique(final_category), collapse = ", "),
-    .groups = 'drop'
-  ) %>%
-  arrange(desc(count))
-
-print("\nMost common industry codes for healthy/moderately healthy establishments:")
-print(head(healthy_patterns, 20))
-
-# Sample of cases
-print("\nSample of establishments:")
-print(head(review_needed, 20))
-
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      `Primary SIC Description` == "Ice Cream Parlors" ~ "unhealthy",
-      `Primary SIC Description` %in% c(
-        "Restaurant Management",
-        "Personal Trainers-Fitness"
-      ) ~ "not_food_service",
-      TRUE ~ final_category
-    ),
-    
-    food_category = if_else(
-      final_category == "not_food_service",
-      "not_food_service",
-      food_category
-    )
-  ) %>%
-  filter(final_category != "not_food_service")
-
-## Tokenization and Bigrams----
-library(tidytext)
-library(stringr)
-library(cld2)
-
-# First update classifications
-refined_classification <- refined_classification %>%
-  mutate(
-    detected_language = detect_language(`Company Name`),
-    is_mexican = detected_language == "es" | 
-      str_detect(tolower(`Company Name`), "mexican|mexico"),
-    final_category = case_when(
-      (`Primary NAICS Description` == "Full-Service Restaurants" |
-         `Primary SIC Description` == "Restaurants") &
-        (detected_language == "es" | 
-           str_detect(tolower(`Company Name`), "mexican|mexico")) ~ "unhealthy",
-      TRUE ~ final_category
-    )
-  )
-
-# Then analyze the healthy/moderately healthy restaurants
-health_status_restaurants <- refined_classification %>%
+# Let's also get a word frequency analysis of these station names
+gas_station_words <- dataaxle %>%
   filter(
-    (`Primary NAICS Description` == "Full-Service Restaurants" |
-       `Primary SIC Description` == "Restaurants") &
-      final_category %in% c("moderately_healthy", "healthy")
-  )
-
-# Tokenize restaurant names
-tokens <- health_status_restaurants %>%
-  unnest_tokens(word, `Company Name`) %>%
-  anti_join(stop_words) %>%
-  filter(!str_detect(word, "^[0-9]+$")) %>%
-  count(word, sort = TRUE)
-
-# Create bigrams
-bigrams <- health_status_restaurants %>%
-  unnest_tokens(bigram, `Company Name`, token = "ngrams", n = 2) %>%
-  filter(!str_detect(bigram, "^[0-9 ]+$")) %>%
-  count(bigram, sort = TRUE)
-
-print("Top 200 Single Words in Non-Mexican Restaurant Names:")
-print(tokens, n=200)
-
-print("\nTop 200 Two-Word Combinations in Non-Mexican Restaurant Names:")
-print(bigrams, n=200)
-
-# Summary of changes
-print("\nFinal Category Distribution:")
-print(table(refined_classification$final_category))
-
-# Update restaurant classifications to mark unhealthy establishments
-# Update restaurant classifications to mark unhealthy establishments
-refined_classification <- refined_classification %>%
+    primary_naics_description == "Other Gasoline Stations",
+    food_health_status == "needs_review"
+  ) %>%
   mutate(
-    final_category = case_when(
-      
-      # Previous patterns
-      str_detect(tolower(`Company Name`), 
-                 "subway|raising cane|grandy|schlotzsky|blimpie|potbelly|chick fil|sonic") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "bbq|bar b q|barbeque|bbque|smokehouse|smoke house|dickey|rudy's") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "bar|pub|lounge|tavern|sports|twin peaks|wing|beer") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "buffet|all you can|golden corral|luby") ~ "unhealthy",
-      
-      # New patterns based on token/bigram analysis
-      
-      # Steak-related
-      str_detect(tolower(`Company Name`), 
-                 "steak|steaks|steakhouse|hoffbrau|kobe|prime|angus|frisco") ~ "unhealthy",
-      
-      # Seafood combinations that tend to be unhealthy
-      str_detect(tolower(`Company Name`), 
-                 "crab|shells|truluck|fish city|rockfish|fishbone|joe's crab|captain|capt") ~ "unhealthy",
-      
-      # Additional grill patterns
-      str_detect(tolower(`Company Name`), 
-                 "grill bar|bar grill|sports grill|mongolian grill|genghis|hibachi") ~ "unhealthy",
-      
-      # Tex-Mex and specific Mexican chains
-      str_detect(tolower(`Company Name`), 
-                 "tex mex|southwest grill|moe's southwest|chevys|pedro's|lupe's") ~ "unhealthy",
-      
-      # Additional chain restaurants
-      str_detect(tolower(`Company Name`), 
-                 "carrabba|bone daddy|bottlecap|bonefish|boomerjack|icehouse|buffalo|tillman's") ~ "unhealthy",
-      
-      # Specific food types
-      str_detect(tolower(`Company Name`), 
-                 "philly|cheesesteak|burger|shake|pizza|pasta|noodle|spaghetti") ~ "unhealthy",
-      
-      # Additional venue types
-      str_detect(tolower(`Company Name`), 
-                 "movie grill|alley|tap house|cantina|neighborhood grill") ~ "unhealthy",
-      
-      # Specific regional chains
-      str_detect(tolower(`Company Name`), 
-                 "nick & sam|del frisco|bob's steak|kenny's|saltgrass") ~ "unhealthy",
-      
-      # Additional food indicators
-      str_detect(tolower(`Company Name`), 
-                 "cheese|grilled cheese|fire|smoke|pit|mesquite") ~ "unhealthy",
-      
-      # Keep existing classification if no matches
-      TRUE ~ final_category
-    )
-  )
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
+  ) %>%
+  unnest_tokens(word, clean_name) %>%
+  count(word, sort = TRUE) %>%
+  filter(!word %in% c("the", "and", "of", "a", "in", "at", "by", "on", "for"))
 
-# Verify changes
-summary_stats <- refined_classification %>%
-  group_by(final_category) %>%
+print("Sample of gas stations needing review:")
+print(gas_stations_review)
+
+print("\nMost common words in gas station names:")
+print(head(gas_station_words, 20))
+
+# Get unique SIC codes and their counts
+gas_station_sic <- dataaxle %>%
+  filter(
+    primary_naics_description == "Other Gasoline Stations",
+    food_health_status == "needs_review"
+  ) %>%
+  group_by(primary_sic_code, primary_sic_description) %>%
   summarise(
     count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2)
-  )
-
-print("Updated Classification Summary:")
-print(summary_stats)
-
-## SIC Analysis----
-# Update restaurant classifications with SIC consideration
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      # SIC-based classifications
-      `Primary SIC Description` %in% c("Pizza", "Bars", "Night Clubs", "Cocktail Lounges", 
-                                       "Pubs", "Comedy Clubs", "Karaoke Clubs") ~ "unhealthy",
-      
-      # Previous name-based patterns
-      str_detect(tolower(`Company Name`), 
-                 "subway|raising cane|grandy|schlotzsky|blimpie|potbelly|chick fil|sonic") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "bbq|bar b q|barbeque|bbque|smokehouse|smoke house|dickey|rudy's") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "bar|pub|lounge|tavern|sports|twin peaks|wing|beer") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "buffet|all you can|golden corral|luby") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "steak|steaks|steakhouse|hoffbrau|kobe|prime|angus|frisco") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "pizza|burger|sandwich|wings|taco|burrito|nachos") ~ "unhealthy",
-      
-      str_detect(tolower(`Company Name`), 
-                 "pasta|noodle|spaghetti|fettuccine|linguine|ramen|udon") ~ "unhealthy",
-      
-      # Healthy SIC overrides
-      `Primary SIC Description` %in% c("Health Clubs Studios & Gymnasiums", 
-                                       "Health Spas", "Pilates", "Juice Bars",
-                                       "Children's Fitness", "Medical Fitness Centers") 
-      & !str_detect(tolower(`Company Name`), 
-                    "bar|grill|burger|pizza|steak|wing|pub|lounge") ~ "healthy",
-      
-      # Keep existing classification if no matches
-      TRUE ~ final_category
-    )
-  )
-
-# Verify changes
-summary_stats <- refined_classification %>%
-  group_by(`Primary SIC Description`, final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2)
+    example_names = paste(head(company_name, 3), collapse = "; ")
   ) %>%
   arrange(desc(count))
 
-print("Updated Classification Summary:")
-print(summary_stats)
+print("SIC code distribution for gas stations needing review:")
+print(gas_station_sic)
 
-## Final Update----
-# Comprehensive classification update with "needs_manual_review" default
-refined_classification <- refined_classification %>%
+
+dataaxle <- dataaxle %>%
   mutate(
-    # Pre-process company names to handle special cases
-    processed_name = case_when(
-      str_detect(tolower(`Company Name`), "barre|barry's|body bar") ~ 
-        str_replace_all(tolower(`Company Name`), "barre|barry's|body bar", "FITNESS_TEMP"),
-      TRUE ~ tolower(`Company Name`)
-    ),
-    
-    final_category = case_when(
-      # Health/Fitness establishments
-      `Primary SIC Description` %in% c(
-        "Health Clubs Studios & Gymnasiums",
-        "Health Spas", 
-        "Pilates",
-        "Children's Fitness",
-        "Medical Fitness Centers",
-        "Gymnasiums",
-        "Sports & Recreation Facilities Program",
-        "Senior Citizen Fitness"
-      ) & !str_detect(processed_name, 
-                      "grill|burger|pizza|steak|wing|pub|lounge") ~ "healthy",
+    food_health_status = case_when(
+      # Update gas stations to unhealthy
+      primary_naics_description == "Other Gasoline Stations" &
+        primary_sic_code == 554101 &
+        food_health_status == "needs_review" ~ "unhealthy",
       
-      # Clear unhealthy categories by SIC
-      `Primary SIC Description` %in% c(
-        "Pizza", 
-        "Bars", 
-        "Ice Cream Parlors", 
-        "Night Clubs",
-        "Cocktail Lounges", 
-        "Pubs", 
-        "Comedy Clubs", 
-        "Karaoke Clubs"
-      ) ~ "unhealthy",
-      
-      # Service stations with food
-      `Primary SIC Description` == "Service Stations-Gasoline & Oil" &
-        str_detect(processed_name, 
-                   "food|restaurant|cafe|deli|mart|store") ~ "unhealthy",
-      
-      # Coffee shops classification
-      `Primary SIC Description` == "Coffee Shops" &
-        str_detect(processed_name, 
-                   "juice|smoothie|health|organic|vegan") ~ "healthy",
-      `Primary SIC Description` == "Coffee Shops" ~ "moderately_healthy",
-      
-      # Carry-out classification
-      `Primary SIC Description` == "Foods-Carry Out" &
-        str_detect(processed_name, 
-                   "fast|burger|pizza|wing|taco|fries|drive|thru") ~ "unhealthy",
-      `Primary SIC Description` == "Foods-Carry Out" &
-        str_detect(processed_name, 
-                   "healthy|organic|vegan|salad|poke|mediterranean") ~ "healthy",
-      `Primary SIC Description` == "Foods-Carry Out" ~ "moderately_unhealthy",
-      
-      # Virtual kitchens
-      `Primary SIC Description` == "Virtual Kitchens" &
-        str_detect(processed_name, 
-                   "healthy|organic|vegan|salad") ~ "moderately_healthy",
-      `Primary SIC Description` == "Virtual Kitchens" ~ "moderately_unhealthy",
-      
-      # Juice bars
-      `Primary SIC Description` == "Juice Bars" &
-        !str_detect(processed_name, 
-                    "grill|pub|lounge") ~ "healthy",
-      
-      # Restaurant classification by name patterns - Unhealthy
-      `Primary SIC Description` == "Restaurants" & 
-        str_detect(processed_name, paste(
-          "subway|raising cane|grandy|schlotzsky|blimpie|potbelly|chick fil|sonic",
-          "mcdonalds|burger king|wendys|arbys|popeyes|kfc|taco bell|whataburger",
-          "dairy queen|five guys|in-n-out|carl|jack in|white castle|domino|pizza hut",
-          "little caesars|papa john|chuck e cheese|cicis|papa murphy",
-          sep="|"
+      # Keep all other existing classifications
+      TRUE ~ food_health_status
+    )
+  )
+
+# RESTAURANTS----
+# Update pizza places to unhealthy
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
+      primary_naics_description == "Full-Service Restaurants" &
+        primary_sic_code == 581222 &
+        food_health_status == "needs_review" ~ "unhealthy",
+      TRUE ~ food_health_status
+    )
+  )
+
+# Now get bigrams for remaining restaurants
+restaurant_bigrams <- dataaxle %>%
+  filter(
+    primary_naics_description == "Full-Service Restaurants",
+    food_health_status == "needs_review"
+  ) %>%
+  mutate(
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
+  ) %>%
+  unnest_tokens(bigram, clean_name, token = "ngrams", n = 2) %>%
+  count(bigram, sort = TRUE) %>%
+  filter(!is.na(bigram))
+
+# Verify the update
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n())
+
+print("Updated Classification Summary:")
+print(classification_summary)
+
+print("\nMost common bigrams in restaurant names:")
+print(head(restaurant_bigrams, 20))
+
+dataaxle <- dataaxle %>%
+  mutate(
+    food_health_status = case_when(
+      primary_naics_description == "Full-Service Restaurants" &
+        food_health_status == "needs_review" &
+        str_detect(tolower(company_name), paste(
+          "mc donald|mcdonald|chick fil|church s|arby s|denny s|applebee s|grandy s|boston market|freebirds",
+          collapse = "|"
         )) ~ "unhealthy",
-      
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, 
-                   "bbq|bar b q|barbeque|bbque|smokehouse|smoke house|dickey|rudy") ~ "unhealthy",
-      
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, 
-                   "bar |pub|lounge|tavern|sports|twin peaks|wing|beer") ~ "unhealthy",
-      
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, 
-                   "buffet|all you can|golden corral|luby|hometown|ryan|furr") ~ "unhealthy",
-      
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, 
-                   "steak|steakhouse|hoffbrau|kobe|prime|angus|frisco|outback|longhorn|texas roadhouse") ~ "unhealthy",
-      
-      # Clearly healthy restaurants
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, paste(
-          "vegan|vegetarian|organic|salad|poke|fresh|health|smoothie|juice",
-          "clean|protein|nutri|wellness|plant.based|wholesome|farm.to.table",
-          sep="|"
-        )) ~ "healthy",
-      
-      # Moderately healthy restaurants
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, paste(
-          "sushi|mediterranean|greek|vietnamese|pho|thai|indian|korean|japanese",
-          "asian|chinese|dim sum|seafood|fish|grilled|wok|mongolian|teriyaki",
-          "kebab|shawarma|falafel|hummus|halal|bowl|bistro|cafe",
-          sep="|"
-        )) ~ "moderately_healthy",
-      
-      # Additional unhealthy patterns
-      `Primary SIC Description` == "Restaurants" &
-        str_detect(processed_name, paste(
-          "pizza|burger|sandwich|wings|taco|burrito|nachos|quesadilla",
-          "pasta|noodle|spaghetti|fettuccine|linguine|ramen|udon",
-          "ice cream|frozen yogurt|dessert|sweet|candy|cake|donut|cookie",
-          "drive.thru|drive.in|fast|express|quick|24.hour|delivery",
-          sep="|"
-        )) ~ "unhealthy",
-      
-      # Default restaurant classification to needs_manual_review if no patterns match
-      `Primary SIC Description` == "Restaurants" ~ "needs_manual_review",
-      
-      # Keep existing classification if nothing matches
-      TRUE ~ final_category
-    )
-  ) %>%
-  select(-processed_name)  # Remove temporary column
-
-# Run validation and summary statistics
-summary_stats <- refined_classification %>%
-  group_by(`Primary SIC Description`, final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2)
-  ) %>%
-  arrange(desc(count))
-
-print("Updated Classification Summary:")
-print(summary_stats)
-
-# Print sample of establishments needing review
-needs_review <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  select(`Company Name`, `Primary SIC Description`) %>%
-  arrange(`Company Name`)
-
-print("\nSample of Establishments Needing Review:")
-print(head(needs_review, 100))
-
-# Distribution by category
-category_distribution <- refined_classification %>%
-  group_by(final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2)
-  ) %>%
-  arrange(desc(count))
-
-print("\nDistribution by Category:")
-print(category_distribution)
-
-### More refinement----
-# Additional refined classification for remaining review cases
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      # Keep existing non-review classifications
-      final_category != "needs_manual_review" ~ final_category,
-      
-      # New patterns for remaining reviews
-      # Chinese/Asian restaurants (like "2 Go China")
-      str_detect(tolower(`Company Name`), 
-                 "china|chinese|wok|dragon|panda|golden|palace|dynasty|hong kong|
-                lucky|peking|taipei|tokyo|seoul|saigon|hunan|szechuan") ~ "moderately_healthy",
-      
-      # Chicken places
-      str_detect(tolower(`Company Name`), 
-                 "chicken|chick|pollo|hen|rooster(?!.*grill)") ~ "unhealthy",
-      
-      # Local/Family restaurants
-      str_detect(tolower(`Company Name`), 
-                 "\\d+\\s+(st|street|ave|avenue|rd|road|hwy|highway|n|s|e|w)") ~ "moderately_healthy",
-      
-      # Additional Mexican/Latin patterns
-      str_detect(tolower(`Company Name`), 
-                 "taqueria|tortilla|jalisco|guadalajara|el\\s|la\\s|los\\s|las\\s|
-                comida|cocina|restaurante") ~ "moderately_healthy",
-      
-      # Additional Mediterranean/Middle Eastern
-      str_detect(tolower(`Company Name`), 
-                 "kebab|gyro|shawarma|falafel|hummus|pita|mediterranean|
-                turkish|persian|lebanese|arabic") ~ "moderately_healthy",
-      
-      # Additional healthy indicators
-      str_detect(tolower(`Company Name`), 
-                 "garden|harvest|natural|green|fresh|organic|farm|market") ~ "healthy",
-      
-      # Additional unhealthy indicators
-      str_detect(tolower(`Company Name`), 
-                 "grill(?!.*fish)|grille|diner|drive|thru|express|
-                shack|joint|house") ~ "unhealthy",
-      
-      # Traditional restaurants
-      str_detect(tolower(`Company Name`), 
-                 "kitchen|cafe|bistro|eatery|dining|restaurant|home|country") ~ "moderately_healthy",
-      
-      # Numbers and street names (likely local establishments)
-      str_detect(tolower(`Company Name`), 
-                 "^\\d+\\s+[a-z]+|\\d+th|\\d+nd|\\d+rd|\\d+st") ~ "moderately_healthy",
-      
-      # Keep as needs_manual_review if still no match
-      TRUE ~ "needs_manual_review"
+      TRUE ~ food_health_status
     )
   )
 
-# Run updated statistics to see impact
-summary_stats <- refined_classification %>%
-  group_by(`Primary SIC Description`, final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2)
-  ) %>%
-  arrange(desc(count))
-
-print("Updated Classification Summary:")
-print(summary_stats)
-
-# Check remaining review cases
-remaining_review <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  select(`Company Name`, `Primary SIC Description`) %>%
-  arrange(`Company Name`)
-
-print("\nRemaining Cases Needing Review:")
-print(head(remaining_review, 100))
-
-###Token and Bigram analysis of needs review----
-# Analyze tokens and bigrams from remaining review cases
-review_establishments <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  # Preprocess company names
+# Classify restaurants using grep patterns
+dataaxle <- dataaxle %>%
   mutate(
-    processed_name = tolower(`Company Name`),
-    # Remove digits and special characters for cleaner analysis
-    processed_name = str_replace_all(processed_name, "[0-9]", ""),
-    processed_name = str_replace_all(processed_name, "[^a-z\\s]", " "),
-    processed_name = str_squish(processed_name)
+    food_health_status = case_when(
+      primary_naics_description == "Full-Service Restaurants" &
+        food_health_status == "needs_review" &
+        (
+          grepl("mc.*donald|mcdonald", company_name, ignore.case=TRUE) |
+            grepl("chick.*fil|chickfil", company_name, ignore.case=TRUE) |
+            grepl("church.*s.*chicken|churchs.*chicken", company_name, ignore.case=TRUE) |
+            grepl("arby.*s|arbys", company_name, ignore.case=TRUE) |
+            grepl("denny.*s|dennys", company_name, ignore.case=TRUE) |
+            grepl("applebee.*s|applebees", company_name, ignore.case=TRUE) |
+            grepl("grandy.*s|grandys", company_name, ignore.case=TRUE) |
+            grepl("luby.*s|lubys", company_name, ignore.case=TRUE) |
+            grepl("boston.*market", company_name, ignore.case=TRUE) |
+            grepl("freebirds", company_name, ignore.case=TRUE) |
+            grepl("mi.*cocina", company_name, ignore.case=TRUE) |
+            grepl("roadhouse", company_name, ignore.case=TRUE) |
+            grepl("chicken.*rice", company_name, ignore.case=TRUE) |
+            grepl("cowboy.*chicken", company_name, ignore.case=TRUE) |
+            grepl("chicken.*express", company_name, ignore.case=TRUE) |
+            grepl("pollo.*regio", company_name, ignore.case=TRUE) |
+            grepl("la.*madeleine", company_name, ignore.case=TRUE) |
+            grepl("italian.*restaurant|s.*italian", company_name, ignore.case=TRUE) |
+            grepl("carl.*s.*jr|carls.*jr", company_name, ignore.case=TRUE) |
+            grepl("steak.*n.*shake|steak.*and.*shake", company_name, ignore.case=TRUE) |
+            grepl("captain.*d|capt.*d", company_name, ignore.case=TRUE) |
+            grepl("crab.*shack", company_name, ignore.case=TRUE) |
+            grepl("texas.*land.*cattle|land.*cattle", company_name, ignore.case=TRUE) |
+            grepl("henderson.*chicken", company_name, ignore.case=TRUE) |
+            grepl("chicken.*dinner.*house|dinner.*house", company_name, ignore.case=TRUE) |
+            grepl("daddy.*s.*chicken", company_name, ignore.case=TRUE) |
+            grepl("babe.*s.*chicken", company_name, ignore.case=TRUE)|
+            grepl("chicken.*seafood", company_name, ignore.case=TRUE) |
+            grepl("s.*catfish", company_name, ignore.case=TRUE) |
+            grepl("s.*ribs", company_name, ignore.case=TRUE) |
+            grepl("red.*hot.*blue", company_name, ignore.case=TRUE) |
+            grepl("egg.*roll", company_name, ignore.case=TRUE) |
+            grepl("pollo.*loco", company_name, ignore.case=TRUE) |
+            grepl("royal.*chopstix", company_name, ignore.case=TRUE) |
+            grepl("cheesecake.*factory", company_name, ignore.case=TRUE) |
+            grepl("huddle.*house", company_name, ignore.case=TRUE) |
+            grepl("soul.*food", company_name, ignore.case=TRUE) |
+            grepl("kfc|kentucky fried chicken", company_name, ignore.case=TRUE) |
+            grepl("quiznos", company_name, ignore.case=TRUE) |
+            grepl("fuddruckers", company_name, ignore.case=TRUE) |
+            grepl("dave.*buster", company_name, ignore.case=TRUE) |
+            grepl("texadelphia", company_name, ignore.case=TRUE) |
+            grepl("au bon pain", company_name, ignore.case=TRUE) |
+            grepl("egg.*i", company_name, ignore.case=TRUE) |  # Breakfast chain, typically heavy foods
+            grepl("le peep", company_name, ignore.case=TRUE) |  # Similar breakfast chain
+            grepl("rice express", company_name, ignore.case=TRUE) |  # Fast food Asian
+            grepl("buca di beppo", company_name, ignore.case=TRUE) |  # Italian chain, large portions
+            grepl("china express", company_name, ignore.case=TRUE) |  # Fast food Chinese
+            grepl("houlihan's", company_name, ignore.case=TRUE)  |
+            grepl("lisa.*s chicken", company_name, ignore.case=TRUE) |
+            grepl("williams chicken", company_name, ignore.case=TRUE) |
+            grepl("zaxby.*s", company_name, ignore.case=TRUE) |
+            grepl("italia express", company_name, ignore.case=TRUE) |
+            grepl("bahama buck.*s", company_name, ignore.case=TRUE) |  # Shaved ice/desserts
+            grepl("benihana", company_name, ignore.case=TRUE) |  # Hibachi, large portions
+            grepl("freddy.*s", company_name, ignore.case=TRUE) | # Freddy's Frozen Custard & Steakburgers |
+          grepl("taste of asia", company_name, ignore.case=TRUE) |  # Typically fast-food Asian
+            grepl("culver.*s", company_name, ignore.case=TRUE) |  # Fast food burgers/custard
+            grepl("tin star", company_name, ignore.case=TRUE) |  # Tex-Mex fast casual
+            grepl("el regio", company_name, ignore.case=TRUE) |  # Similar to Pollo Regio
+            grepl("penne pomodoro", company_name, ignore.case=TRUE) |  # Italian
+            grepl("pollo tropical", company_name, ignore.case=TRUE) |  # Fast food chicken
+            grepl("rice xpress", company_name, ignore.case=TRUE) | # Fast food Asian
+            grepl("charley.*s philly|fred.*s.*downtown philly", company_name, ignore.case=TRUE) |  # Philly cheesesteak places
+            grepl("melting pot", company_name, ignore.case=TRUE) |  # Fondue restaurant
+            grepl("redneck heaven", company_name, ignore.case=TRUE) |  # Bar food
+            grepl("gloria.*s latin", company_name, ignore.case=TRUE) |  # Tex-Mex
+            grepl("las ranitas", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("el paisa|la paisanita", company_name, ignore.case=TRUE) |  # Mexican fast food
+            grepl("la playa maya", company_name, ignore.case=TRUE) | # Mexican |
+          grepl("texas.*de.*brazil", company_name, ignore.case=TRUE) |  # Brazilian steakhouse
+            grepl("yogurt story", company_name, ignore.case=TRUE) |  # Frozen yogurt
+            grepl("keller.*s drive|kellers drive", company_name, ignore.case=TRUE) |  # Drive-in burger joint
+            grepl("maggiano.*s", company_name, ignore.case=TRUE) |  # Italian chain
+            grepl("matt.*s rancho", company_name, ignore.case=TRUE) |  # Tex-Mex
+            grepl("burrito jimmy", company_name, ignore.case=TRUE) |  # Fast food Mexican
+            grepl("china harbor", company_name, ignore.case=TRUE) |  # Chinese
+            grepl("pollo campero", company_name, ignore.case=TRUE) |  # Fried chicken chain
+            grepl("wienerschnitzel", company_name, ignore.case=TRUE) |  # Hot dog chain
+            grepl("bone daddy", company_name, ignore.case=TRUE) |  # BBQ/sports bar
+            grepl("el fenix", company_name, ignore.case=TRUE) |  # Tex-Mex
+            grepl("hacienda ranch", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("s ristorante", company_name, ignore.case=TRUE) | # Italian restaurants |
+          grepl("benito.*s", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("birrieria", company_name, ignore.case=TRUE) |  # Mexican birria
+            grepl("los vaqueros", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("new china", company_name, ignore.case=TRUE) |  # Chinese takeout
+            grepl("tortilleria", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("chef chen", company_name, ignore.case=TRUE) |  # Chinese
+            grepl("del frisco.*s", company_name, ignore.case=TRUE) |  # Steakhouse
+            grepl("el tacaso", company_name, ignore.case=TRUE) |  # Taco place
+            grepl("b.*q", company_name, ignore.case=TRUE) |  # BBQ places
+            grepl("seafood.*chicken|chicken.*fish", company_name, ignore.case=TRUE) |  # Fried seafood/chicken combos
+            grepl("julio.*s", company_name, ignore.case=TRUE) | # Mexican
+            grepl("el tizoncito", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("hoffbrau steaks", company_name, ignore.case=TRUE) |  # Steakhouse
+            grepl("italian villa", company_name, ignore.case=TRUE) |  # Italian
+            grepl("londoner", company_name, ignore.case=TRUE) |  # British pub
+            grepl("rio mambo", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("salsa limon", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("cajun corner", company_name, ignore.case=TRUE) |  # Cajun
+            grepl("los lupes", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("rice pot", company_name, ignore.case=TRUE) |  # Asian fast food
+            grepl("fish.*chicken|chicken.*fish", company_name, ignore.case=TRUE) |  # Fried combos
+            grepl("old fashioned", company_name, ignore.case=TRUE) | # Usually burger/ice cream places
+            grepl("catfish house", company_name, ignore.case=TRUE) |  # Fried catfish
+            grepl("chopstick express", company_name, ignore.case=TRUE) |  # Fast food Asian
+            grepl("dos chiles grandes", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("dragon express", company_name, ignore.case=TRUE) |  # Fast food Asian
+            grepl("el polio regio", company_name, ignore.case=TRUE) |  # Mexican chicken
+            grepl("el rinconcito", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("gourmet china", company_name, ignore.case=TRUE) |  # Chinese
+            grepl("grumps", company_name, ignore.case=TRUE) |  # Burgers
+            grepl("hook line.*sinker", company_name, ignore.case=TRUE) |  # Fried seafood
+            grepl("eddie v.*s", company_name, ignore.case=TRUE) |  # Steakhouse/seafood chain
+            grepl("new orleans", company_name, ignore.case=TRUE) |  # Cajun/creole
+            grepl("italian rstrnt", company_name, ignore.case=TRUE) | # Italian restaurants
+            grepl("king.*s noodle", company_name, ignore.case=TRUE) |  # Chinese
+            grepl("la picosa", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("la playita", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("mattito.*s", company_name, ignore.case=TRUE) |  # Tex-Mex
+            grepl("plaza del sol", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("pollo salsa", company_name, ignore.case=TRUE) |  # Chicken
+            grepl("riscky.*s", company_name, ignore.case=TRUE) |  # BBQ
+            grepl("york sub", company_name, ignore.case=TRUE) |  # Sub sandwiches
+            grepl("empress of", company_name, ignore.case=TRUE) |  # Usually Chinese
+            grepl("kuai.*dumpling", company_name, ignore.case=TRUE) | # Dumplings
+            grepl("rise.*shine", company_name, ignore.case=TRUE) |  # Breakfast
+            grepl("sarku japan", company_name, ignore.case=TRUE) |  # Mall food court Japanese
+            grepl("short stop food", company_name, ignore.case=TRUE) |  # Fast food
+            grepl("spaghetti warehouse", company_name, ignore.case=TRUE) |  # Italian
+            grepl("urban crust", company_name, ignore.case=TRUE) |  # Pizza
+            grepl("wild turkey", company_name, ignore.case=TRUE) |  # Bar food
+            grepl("yesterdays texas", company_name, ignore.case=TRUE) |  # American/Texas
+            grepl("becks prime", company_name, ignore.case=TRUE) |  # Burgers
+            grepl("big shucks", company_name, ignore.case=TRUE) |  # Seafood
+            grepl("shell shack", company_name, ignore.case=TRUE) |  # Seafood
+            grepl("harry.*s", company_name, ignore.case=TRUE) | # Usually steakhouse/American
+            grepl("el atoron", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("ernesto.*s", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("holy frijoles", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("johnny carino.*s", company_name, ignore.case=TRUE) |  # Italian chain
+            grepl("johnny rockets", company_name, ignore.case=TRUE) |  # Burger chain
+            grepl("kincaid.*s", company_name, ignore.case=TRUE) |  # Burgers
+            grepl("la potosina", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("medieval times", company_name, ignore.case=TRUE) |  # Theme restaurant
+            grepl("home cooking", company_name, ignore.case=TRUE) |  # Southern/comfort food
+            grepl("chinese food", company_name, ignore.case=TRUE) |  # Generic Chinese
+            grepl("mac.*s", company_name, ignore.case=TRUE) |  # Usually burgers/American
+            grepl("mi pueblo", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("my estrella", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("noodle wave", company_name, ignore.case=TRUE) |  # Asian noodles
+            grepl("pdq", company_name, ignore.case=TRUE) |  # Fast food chicken
+            grepl("rice garden", company_name, ignore.case=TRUE) |  # Asian
+            grepl("slim chickens", company_name, ignore.case=TRUE) |  # Fried chicken
+            grepl("torteria", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("yogurtville", company_name, ignore.case=TRUE) |  # Frozen yogurt
+            grepl("anamia.*s", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("coal vines", company_name, ignore.case=TRUE) |  # Pizza
+            grepl("street food", company_name, ignore.case=TRUE) |  # Usually fast food
+            grepl("the box", company_name, ignore.case=TRUE) | # Usually quick service
+            grepl("asian bowl", company_name, ignore.case=TRUE) |  # Fast casual Asian
+            grepl("blue goose", company_name, ignore.case=TRUE) |  # Mexican cantina
+            grepl("buzzbrews", company_name, ignore.case=TRUE) |  # Diner
+            grepl("china dragon", company_name, ignore.case=TRUE) |  # Chinese
+            grepl("chubby.*s", company_name, ignore.case=TRUE) |  # Usually burgers/wings
+            grepl("go loco", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("italian express", company_name, ignore.case=TRUE) |  # Fast Italian
+            grepl("el pollo", company_name, ignore.case=TRUE) |  # Mexican chicken
+            grepl("la nueva", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("s steak", company_name, ignore.case=TRUE) |  # Steakhouse
+            grepl("de noche", company_name, ignore.case=TRUE) |  # Mexican
+            grepl("daddy.*s", company_name, ignore.case=TRUE)  # Usually BBQ/comfort food
+        ) ~ "unhealthy",
+      
+      # Previous healthy classifications remain the same
+      primary_naics_description == "Full-Service Restaurants" &
+        food_health_status == "needs_review" &
+        (
+          grepl("thai.*cuisine", company_name, ignore.case=TRUE) |
+            grepl("jimmy.*john|jimmyjohn", company_name, ignore.case=TRUE) |
+            grepl("indian.*cuisine", company_name, ignore.case=TRUE) |
+            grepl("asian.*cuisine", company_name, ignore.case=TRUE) |
+            grepl("chinese.*rstrnt|chinese.*restaurant", company_name, ignore.case=TRUE) |
+            grepl("salata", company_name, ignore.case=TRUE) |
+            grepl("flying fish", company_name, ignore.case=TRUE) |  # Seafood restaurant
+            grepl("blue fish", company_name, ignore.case=TRUE) | # Usually sushi/seafood 
+            grepl("best thai", company_name, ignore.case=TRUE) |
+            grepl("sweet tomatoes", company_name, ignore.case=TRUE) | # Salad buffet
+            grepl("modern market", company_name, ignore.case=TRUE) | # Farm-to-table, health-focused 
+            grepl("pho.*is.*for.*lovers", company_name, ignore.case=TRUE) |  # Vietnamese pho
+            grepl("garden.*tea", company_name, ignore.case=TRUE) | # Tea rooms often have healthier options
+            grepl("pho 95", company_name, ignore.case=TRUE) |  # Vietnamese pho
+            grepl("viet tofu", company_name, ignore.case=TRUE) | # Vietnamese/vegetarian
+            grepl("pho pasteur", company_name, ignore.case=TRUE) |  # Vietnamese pho
+            grepl("que huong", company_name, ignore.case=TRUE) | # Vietnamese
+            grepl("urban eatz", company_name, ignore.case=TRUE) |  # Health-focused
+            grepl("chilli thai", company_name, ignore.case=TRUE) |  # Thai
+            grepl("little katana", company_name, ignore.case=TRUE) |  # Sushi
+            grepl("first watch", company_name, ignore.case=TRUE) |  # Health-focused breakfast
+            grepl("japanese cuisine", company_name, ignore.case=TRUE) | # Japanese
+            grepl("bamboo garden", company_name, ignore.case=TRUE) |  # Usually vegetarian Asian
+            grepl("japanese rstrnt", company_name, ignore.case=TRUE) | # Japanese
+            grepl("east hampton sandwich", company_name, ignore.case=TRUE) |  # Health-focused sandwiches
+            grepl("chef.*s gallery", company_name, ignore.case=TRUE)  # Usually upscale dining
+        ) ~ "healthy",
+      
+      # Remove medical center - not a restaurant
+      primary_naics_description == "Full-Service Restaurants" &
+        food_health_status == "needs_review" &
+        grepl("children.*s medical|medical c", company_name, ignore.case=TRUE) |
+        grepl("mark of excellence|enterprises inc", company_name, ignore.case=TRUE) |
+        grepl("foods inc", company_name, ignore.case=TRUE) |
+        grepl("food inc", company_name, ignore.case=TRUE) |
+        grepl("yum brands", company_name, ignore.case=TRUE) |
+        grepl("butler franchise", company_name, ignore.case=TRUE)
+      ~ "flag_for_potential_removal",
+      
+      TRUE ~ food_health_status
+    )
   )
 
-# Create tokens (single words)
-review_tokens <- review_establishments %>%
-  unnest_tokens(word, processed_name) %>%
-  anti_join(stop_words) %>%  # Remove common stop words
+
+# Look at remaining bigrams
+remaining_bigrams <- dataaxle %>%
   filter(
-    !str_detect(word, "^[0-9]+$"),  # Remove pure numbers
-    nchar(word) > 1  # Remove single characters
+    primary_naics_description == "Full-Service Restaurants",
+    food_health_status == "needs_review"
   ) %>%
-  count(word, sort = TRUE)
-
-# Create bigrams (two-word combinations)
-review_bigrams <- review_establishments %>%
-  unnest_tokens(bigram, processed_name, token = "ngrams", n = 2) %>%
-  filter(!str_detect(bigram, "^[0-9 ]+$")) %>%  # Remove pure number combinations
-  count(bigram, sort = TRUE)
-
-# Create trigrams (three-word combinations) for additional context
-review_trigrams <- review_establishments %>%
-  unnest_tokens(trigram, processed_name, token = "ngrams", n = 3) %>%
-  filter(!str_detect(trigram, "^[0-9 ]+$")) %>%
-  count(trigram, sort = TRUE)
-
-# Analyze common word patterns
-print("Most Common Single Words in Review Cases:")
-print(review_tokens %>% filter(n >= 5), n=100)
-
-print("\nMost Common Two-Word Combinations in Review Cases:")
-print(review_bigrams %>% filter(n >= 3), n=100)
-
-print("\nMost Common Three-Word Combinations in Review Cases:")
-print(review_trigrams %>% filter(n >= 2), n=50)
-
-# Analyze patterns with SIC descriptions
-pattern_analysis <- review_establishments %>%
-  group_by(`Primary SIC Description`) %>%
-  summarise(
-    count = n(),
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
-  arrange(desc(count))
-
-print("\nSIC Description Distribution in Review Cases:")
-print(pattern_analysis)
-
-# Analyze specific word associations
-specific_words <- c("grill", "restaurant", "cafe", "kitchen", "house", "express", "buffet")
-for(word in specific_words) {
-  print(paste("\nEstablishments containing '", word, "':", sep=""))
-  print(review_establishments %>% 
-          filter(str_detect(processed_name, word)) %>%
-          select(`Company Name`) %>%
-          head(5))
-}
-
-# Get distribution of name lengths
-name_length_dist <- review_establishments %>%
   mutate(
-    word_count = str_count(processed_name, "\\S+")
+    clean_name = company_name %>%
+      tolower() %>%
+      str_replace_all("[[:punct:]]", " ") %>%
+      str_replace_all("[0-9]", " ") %>%
+      str_squish()
   ) %>%
-  group_by(word_count) %>%
-  summarise(
-    count = n(),
-    examples = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
-  arrange(desc(count))
+  unnest_tokens(bigram, clean_name, token = "ngrams", n = 2) %>%
+  count(bigram, sort = TRUE) %>%
+  filter(!is.na(bigram))
 
-print("\nDistribution of Name Lengths (word count):")
-print(name_length_dist)
+print("\nRemaining most common bigrams:")
+print(head(remaining_bigrams, 20))
 
-# Suggest additional classification patterns based on analysis
-print("\nPotential New Classification Patterns:")
-print(review_tokens %>% 
-        filter(n >= 10) %>%  # Focus on frequently occurring words
-        mutate(
-          suggested_category = case_when(
-            word %in% c("grill", "express", "buffet", "house") ~ "likely_unhealthy",
-            word %in% c("cafe", "bistro", "fresh") ~ "likely_moderately_healthy",
-            word %in% c("organic", "natural", "vegan") ~ "likely_healthy",
-            TRUE ~ "needs_further_review"
-          )
-        ) %>%
-        arrange(suggested_category, desc(n)))
-
-### Refine Classification----
-# Update classification with new patterns from token/bigram analysis
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      # Keep existing non-review classifications
-      final_category != "needs_manual_review" ~ final_category,
-      
-      # Major Chain Restaurants - Clearly Unhealthy
-      str_detect(tolower(`Company Name`), paste(
-        "mc donald|wendy|arby|denny|applebee|tgi friday|hooters|fuddruckers",
-        "quiznos|panera|murphy|uncle julio|dave buster|bone daddy",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Deli/Subs - Mixed Classifications
-      str_detect(tolower(`Company Name`), "jason.*deli|jimmy john|jersey mike") ~ "moderately_healthy",
-      str_detect(tolower(`Company Name`), "sub.*shop|which wich|cousin.*deli") ~ "moderately_unhealthy",
-      
-      # Mexican/Tex-Mex Establishments
-      str_detect(tolower(`Company Name`), paste(
-        "tex mex|cantina laredo|pappasito|blue goose cantina|mexican food",
-        "mexican cuisine|mexican rstrnt|qdoba|julio",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Seafood Establishments
-      str_detect(tolower(`Company Name`), paste(
-        "long john silver|joe.*crab|red lobster|oyster bar|fish|crawfish",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Italian Establishments
-      str_detect(tolower(`Company Name`), paste(
-        "carino|ristorante|pizzeria|buca di beppo|italian rstrnt",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # BBQ/Southern
-      str_detect(tolower(`Company Name`), paste(
-        "bar b|b q|bbq|bar.*que|southern|soul food|ribs|riscky",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Asian Establishments
-      str_detect(tolower(`Company Name`), paste(
-        "chopstix|taste of asia|egg roll|royal|asian cuisine",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Bars/Wine
-      str_detect(tolower(`Company Name`), paste(
-        "wine bar|bar.*grill|cantina|crab shack",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Bakery/Dessert
-      str_detect(tolower(`Company Name`), paste(
-        "au bon pain|baker|bread|yogurt",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Specific Regional Chains
-      str_detect(tolower(`Company Name`), paste(
-        "texas land cattle|bahama buck|matt.*rancho|gloria",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Local Establishments
-      str_detect(tolower(`Company Name`), paste(
-        "downtown|uptown|fort worth|dallas|street|local",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Keep as review if still no match
-      TRUE ~ "needs_manual_review"
-    )
-  )
-
-# Verify impact
-updated_stats <- refined_classification %>%
-  group_by(final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2),
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
-  arrange(desc(count))
-
-print("Updated Classification Distribution:")
-print(updated_stats)
-
-# Check remaining review cases
-remaining_review <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  select(`Company Name`, `Primary SIC Description`) %>%
-  arrange(`Company Name`)
-
-print("\nRemaining Cases Needing Review:")
-print(head(remaining_review, 20))
-
-### LLC, locations, special----
-refined_classification <- refined_classification %>%
-  mutate(
-    # Pre-process names to handle special cases
-    processed_name = tolower(`Company Name`),
-    
-    final_category = case_when(
-      # Keep existing non-review classifications
-      final_category != "needs_manual_review" ~ final_category,
-      
-      # Clear unhealthy patterns from remaining review
-      str_detect(processed_name, "rib shack|ribs|buffalo('s)?|wing|buffalo") ~ "unhealthy",
-      
-      # Business entities that need verification
-      str_detect(processed_name, paste(
-        "concepts llc|solutions|svc|enterprises|corp|services",
-        "management|restaurant group|food service|catering",
-        sep="|"
-      )) ~ "needs_verification",
-      
-      # Generic locations that need context
-      str_detect(processed_name, paste(
-        "on main|downtown|uptown|plaza|street|avenue|center",
-        "shopping|mall|terminal|airport",
-        sep="|"
-      )) ~ "needs_location_context",
-      
-      # Franchise indicators
-      str_detect(processed_name, "#\\d+|number \\d+|no \\d+") ~ "needs_franchise_check",
-      
-      # Additional unhealthy patterns
-      str_detect(processed_name, paste(
-        "oasis|shack|joint|hut|express|drive|thru|quick",
-        "fast|snack|treats|sweets|candy|ice cream|frozen",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Local establishment patterns
-      str_detect(processed_name, paste(
-        "^[a-z]'s|^[a-z] & [a-z]'s|^the [a-z]+|^old|^original",
-        "family|kitchen|home cooking|house|cafe",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Ethnic cuisine patterns
-      str_detect(processed_name, paste(
-        "tandoor|kebab|pho|wok|dragon|bamboo|sakura|sushi",
-        "thai|vietnamese|korean|indian|mediterranean",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Additional chain identifiers
-      str_detect(processed_name, paste(
-        "famous|original|world|king|queen|prince|royal",
-        "golden|silver|diamond|premium|supreme|ultimate",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Keep remaining cases for manual review
-      TRUE ~ "needs_manual_review"
-    )
-  ) %>%
-  # Create verification flags
-  mutate(
-    needs_verification = case_when(
-      final_category == "needs_verification" ~ TRUE,
-      final_category == "needs_location_context" ~ TRUE,
-      final_category == "needs_franchise_check" ~ TRUE,
-      TRUE ~ FALSE
-    ),
-    # Update final category for verification cases
-    final_category = case_when(
-      final_category %in% c("needs_verification", 
-                            "needs_location_context",
-                            "needs_franchise_check") ~ "needs_manual_review",
-      TRUE ~ final_category
-    )
-  ) %>%
-  select(-processed_name)  # Remove temporary column
-
-# Generate updated statistics
-updated_stats <- refined_classification %>%
-  group_by(final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2),
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
-  arrange(desc(count))
-
-print("Updated Classification Distribution:")
-print(updated_stats)
-
-# Check remaining review cases with verification flags
-remaining_review <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  mutate(
-    review_type = case_when(
-      needs_verification ~ "Needs Business Verification",
-      TRUE ~ "Needs Name Review"
-    )
-  ) %>%
-  select(`Company Name`, `Primary SIC Description`, review_type) %>%
-  arrange(review_type, `Company Name`)
-
-print("\nRemaining Cases by Review Type:")
-print(table(remaining_review$review_type))
-
-print("\nSample of Remaining Cases:")
-print(head(remaining_review, 20))
-
-### Tokens, Bigrams, and Trigrams of Remaining Review----
-# Analyze tokens and bigrams from the remaining manual review cases
-remaining_analysis <- remaining_review %>%
-  # Preprocess company names
-  mutate(
-    processed_name = tolower(`Company Name`),
-    processed_name = str_replace_all(processed_name, "[^a-z\\s]", " "),
-    processed_name = str_squish(processed_name)
-  )
-
-# Create tokens (single words)
-final_review_tokens <- remaining_analysis %>%
-  unnest_tokens(word, processed_name) %>%
-  anti_join(stop_words) %>%  # Remove common stop words
+# Get unique company names and their counts for restaurants still needing review
+remaining_restaurants <- dataaxle %>%
   filter(
-    !str_detect(word, "^[0-9]+$"),  # Remove pure numbers
-    nchar(word) > 1  # Remove single characters
+    primary_naics_description == "Full-Service Restaurants",
+    food_health_status == "needs_review"
   ) %>%
-  count(word, sort = TRUE)
+  count(company_name, sort = TRUE) %>%
+  filter(!is.na(company_name))
 
-# Create bigrams (two-word combinations)
-final_review_bigrams <- remaining_analysis %>%
-  unnest_tokens(bigram, processed_name, token = "ngrams", n = 2) %>%
-  filter(!str_detect(bigram, "^[0-9 ]+$")) %>%  # Remove pure number combinations
-  count(bigram, sort = TRUE)
+print("Most common restaurant names still needing review:")
+print(head(remaining_restaurants, 50))
 
-# Create trigrams (three-word combinations)
-final_review_trigrams <- remaining_analysis %>%
-  unnest_tokens(trigram, processed_name, token = "ngrams", n = 3) %>%
-  filter(!str_detect(trigram, "^[0-9 ]+$")) %>%
-  count(trigram, sort = TRUE)
 
-# Analyze review types
-review_type_analysis <- remaining_analysis %>%
-  group_by(review_type) %>%
-  summarise(
-    count = n(),
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  )
 
-# Print results
-print("Most Common Single Words in Remaining Review Cases:")
-print(final_review_tokens %>% filter(n >= 5), n=100)
-
-print("\nMost Common Two-Word Combinations in Remaining Review Cases:")
-print(final_review_bigrams %>% filter(n >= 3), n=100)
-
-print("\nMost Common Three-Word Combinations in Remaining Review Cases:")
-print(final_review_trigrams %>% filter(n >= 2), n=50)
-
-print("\nDistribution by Review Type:")
-print(review_type_analysis)
-
-# Analyze patterns by review type
-patterns_by_type <- remaining_analysis %>%
-  group_by(review_type) %>%
-  summarise(
-    common_words = paste(head(final_review_tokens$word[final_review_tokens$n >= 10], 5), collapse=", "),
-    common_bigrams = paste(head(final_review_bigrams$bigram[final_review_bigrams$n >= 5], 5), collapse=", ")
-  )
-
-print("\nCommon Patterns by Review Type:")
-print(patterns_by_type)
-
-# Additional analysis of specific patterns
-business_indicators <- c("llc", "inc", "corp", "services", "enterprises", "group")
-location_indicators <- c("main", "street", "ave", "plaza", "center", "mall")
-franchise_indicators <- c("no", "number", "#", "loc", "location")
-
-for(indicator in c(business_indicators, location_indicators, franchise_indicators)) {
-  matches <- remaining_analysis %>%
-    filter(str_detect(processed_name, indicator)) %>%
-    select(`Company Name`) %>%
-    head(5)
-  
-  print(paste("\nSample establishments with '", indicator, "':", sep=""))
-  print(matches)
-}
-
-##Final Classification----
-# Final classification of remaining review cases
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      # Keep existing non-review classifications
-      final_category != "needs_manual_review" ~ final_category,
-      
-      # Unhealthy Establishments
-      
-      # Bar and alcohol-related
-      str_detect(tolower(`Company Name`), paste(
-        "bar b q|bar b|b q|barbecue|red hot blue|dave buster|
-        houlihan|redneck heaven|coal vines|snuffer",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Specific chains and franchises
-      str_detect(tolower(`Company Name`), paste(
-        "mc alister|zaxby|freddy|culver|maggiano|tin star|
-        paciugo|hook line sinker|medieval times",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Specific cuisine types indicating unhealthy
-      str_detect(tolower(`Company Name`), paste(
-        "tex mex|fashioned hmbrgrs|short stop food|big daddy|
-        cajun|gelato|melting pot",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Deli and sub shops
-      str_detect(tolower(`Company Name`), "deli|sub shop|york sub") ~ "moderately_unhealthy",
-      
-      # Moderately Healthy Establishments
-      
-      # Asian cuisine
-      str_detect(tolower(`Company Name`), paste(
-        "viet tofu|kuai dumplings|asian cuisine|pho|
-        hibachi(?!.*grill)|sushi|thai",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Mediterranean/Italian
-      str_detect(tolower(`Company Name`), paste(
-        "italian villa|penne pomodoro|pomodoro|
-        mediterranean|greek|falafel",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Health-focused establishments
-      str_detect(tolower(`Company Name`), paste(
-        "salata|first watch|natural|organic|
-        wholesome|fresh|garden",
-        sep="|"
-      )) ~ "healthy",
-      
-      # Coffee shops and cafes
-      str_detect(tolower(`Company Name`), 
-                 "coffee shop|caffe|tea room") ~ "moderately_healthy",
-      
-      # Business entities and generic names
-      str_detect(tolower(`Company Name`), paste(
-        "llc$|inc$|corp$|services|enterprises|group|
-        holdings|management|solutions",
-        sep="|"
-      )) ~ "needs_verification",
-      
-      # Additional unhealthy indicators
-      str_detect(tolower(`Company Name`), paste(
-        "burger|pizza|wings|fries|shack|
-        drive|thru|express|fast|quick",
-        sep="|"
-      )) ~ "unhealthy",
-      
-      # Mexican/Latin American
-      str_detect(tolower(`Company Name`), paste(
-        "mariscos|pupuseria|tortilleria|antojitos|
-        dos chiles|meso maya|anamia",
-        sep="|"
-      )) ~ "moderately_healthy",
-      
-      # Location-based that need verification
-      str_detect(tolower(`Company Name`), paste(
-        "on main|plaza|mall$|center|
-        medical ctr|shopping|terminal",
-        sep="|"
-      )) ~ "needs_verification",
-      
-      # Keep remaining cases flagged for review
-      TRUE ~ "needs_manual_review"
-    )
-  )
-
-# Create separate lists for different types of review needs
-verification_needed <- refined_classification %>%
-  filter(final_category == "needs_verification") %>%
-  select(`Company Name`, `Primary SIC Description`) %>%
-  arrange(`Company Name`)
-
-manual_review_needed <- refined_classification %>%
-  filter(final_category == "needs_manual_review") %>%
-  select(`Company Name`, `Primary SIC Description`) %>%
-  arrange(`Company Name`)
-
-# Generate final statistics
-final_stats <- refined_classification %>%
-  group_by(final_category) %>%
-  summarise(
-    count = n(),
-    percentage = round(n() / nrow(refined_classification) * 100, 2),
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
+# Get summary of current classifications
+classification_summary <- dataaxle %>%
+  group_by(food_health_status) %>%
+  summarise(count = n()) %>%
   arrange(desc(count))
 
-print("Final Classification Distribution:")
-print(final_stats)
-
-print("\nEstablishments Needing Verification:")
-print(head(verification_needed, 20))
-
-print("\nEstablishments Needing Manual Review:")
-print(head(manual_review_needed, 20))
-
-# Optional: Save review lists to files for manual processing
-write.csv(verification_needed, "establishments_needing_verification.csv", row.names = FALSE)
-write.csv(manual_review_needed, "establishments_needing_manual_review.csv", row.names = FALSE)
-
-
-#NLP----
-library(tidytext)
-library(tidyverse)
-library(quanteda)      # For text preprocessing and n-grams
-library(quanteda.textstats) # For collocations
-library(spacyr)        # For POS tagging
-library(textrank)      # For keyword extraction
-
-# Initialize spaCy
-spacy_initialize()
-
-# Function to preprocess text and create corpus
-create_restaurant_corpus <- function(data, name_col) {
-  # Create corpus with document IDs
-  corp <- corpus(
-    data %>% 
-      mutate(doc_id = row_number()) %>% 
-      select(doc_id, !!sym(name_col)),
-    text_field = name_col
-  )
-  
-  # Tokenize and clean
-  toks <- tokens(corp,
-                 remove_punct = TRUE,
-                 remove_numbers = TRUE,
-                 remove_symbols = TRUE) %>%
-    tokens_tolower()
-  
-  return(list(corpus = corp, tokens = toks))
-}
-
-# Function to extract n-grams and collocations
-analyze_ngrams <- function(tokens, label) {
-  # Create dfm
-  dfm <- dfm(tokens)
-  
-  # Get unigrams
-  unigrams <- textstat_frequency(dfm) %>%
-    select(feature, frequency) %>%
-    rename(term = feature)
-  
-  # Get bigrams
-  bigrams <- tokens_ngrams(tokens, n = 2) %>%
-    dfm() %>%
-    textstat_frequency() %>%
-    select(feature, frequency) %>%
-    rename(term = feature)
-  
-  # Get trigrams
-  trigrams <- tokens_ngrams(tokens, n = 3) %>%
-    dfm() %>%
-    textstat_frequency() %>%
-    select(feature, frequency) %>%
-    rename(term = feature)
-  
-  # Get collocations
-  collocs <- textstat_collocations(tokens, size = 2:3)
-  
-  # Print results
-  print(paste("\n===", label, "Analysis ==="))
-  
-  print("\nTop Unigrams:")
-  print(head(unigrams, 20))
-  
-  print("\nTop Bigrams:")
-  print(head(bigrams, 20))
-  
-  print("\nTop Trigrams:")
-  print(head(trigrams, 20))
-  
-  print("\nSignificant Collocations:")
-  print(head(collocs, 20))
-  
-  return(list(
-    unigrams = unigrams,
-    bigrams = bigrams,
-    trigrams = trigrams,
-    collocations = collocs
-  ))
-}
-
-# Function to get POS tags and dependencies
-analyze_pos <- function(data, name_col) {
-  # Parse with spaCy
-  parsed <- spacy_parse(
-    data %>% pull(!!sym(name_col)),
-    pos = TRUE,
-    tag = TRUE,
-    dependency = TRUE
-  )
-  
-  # Analyze POS patterns
-  pos_patterns <- parsed %>%
-    count(pos, token, sort = TRUE) %>%
-    filter(!pos %in% c("PUNCT", "NUM", "SPACE"))
-  
-  # Analyze dependencies
-  dep_patterns <- parsed %>%
-    count(dep_rel, token, sort = TRUE)
-  
-  return(list(
-    parsed = parsed,
-    pos_patterns = pos_patterns,
-    dep_patterns = dep_patterns
-  ))
-}
-
-# Analyze verification needed establishments
-verification_text <- create_restaurant_corpus(verification_needed, "Company Name")
-verification_ngrams <- analyze_ngrams(verification_text$tokens, "Verification Needed")
-verification_pos <- analyze_pos(verification_needed, "Company Name")
-
-# Analyze manual review needed establishments
-manual_review_text <- create_restaurant_corpus(manual_review_needed, "Company Name")
-manual_review_ngrams <- analyze_ngrams(manual_review_text$tokens, "Manual Review Needed")
-manual_review_pos <- analyze_pos(manual_review_needed, "Company Name")
-
-# Analyze patterns across both datasets
-print("\nCommon Patterns Analysis:")
-
-# Function to identify common patterns
-analyze_common_patterns <- function(ngrams, pos_data, label) {
-  # Get most frequent meaningful combinations
-  common_patterns <- ngrams$collocations %>%
-    filter(lambda > 2) %>%  # Filter for significant collocations
-    arrange(desc(count))
-  
-  # Get common POS sequences
-  pos_sequences <- pos_data$parsed %>%
-    group_by(doc_id) %>%
-    summarise(pos_sequence = paste(pos, collapse = " ")) %>%
-    count(pos_sequence, sort = TRUE)
-  
-  print(paste("\n===", label, "Common Patterns ==="))
-  print("\nSignificant Word Combinations:")
-  print(head(common_patterns, 20))
-  
-  print("\nCommon POS Sequences:")
-  print(head(pos_sequences, 20))
-  
-  return(list(
-    patterns = common_patterns,
-    pos_sequences = pos_sequences
-  ))
-}
-
-verification_patterns <- analyze_common_patterns(
-  verification_ngrams, 
-  verification_pos, 
-  "Verification Needed"
-)
-
-manual_review_patterns <- analyze_common_patterns(
-  manual_review_ngrams, 
-  manual_review_pos, 
-  "Manual Review Needed"
-)
-
-# Create classification rules based on discovered patterns
-restaurant_patterns <- list(
-  # Business/Corporate Entities (needs verification)
-  business = list(
-    unigrams = c("inc", "llc", "corp", "enterprises", "management", "holdings", "solutions", "industries"),
-    bigrams = c("enterprises inc", "foods inc", "franchise inc", "holdings llc", "entertainment inc"),
-    pos_sequences = c("PROPN PROPN PROPN", "PROPN PROPN", "NOUN PROPN PROPN")
-  ),
-  
-  # Fast Food/Unhealthy
-  unhealthy = list(
-    # Direct indicators
-    bigrams = c("hot blue", "red hot", "dave buster", "land cattle", "burger king",
-                "fast food", "fried chicken", "ice cream"),
-    # Cooking method indicators
-    cooking = c("fried", "deep fried", "battered"),
-    # Food type indicators
-    food_types = c("burgers", "wings", "fries", "pizza", "hot dogs", "bbq", "bar b q"),
-    pos_sequences = c("ADJ NOUN", "NOUN PART")
-  ),
-  
-  # Healthy
-  healthy = list(
-    unigrams = c("salad", "organic", "vegan", "fresh", "natural", "garden"),
-    bigrams = c("fresh market", "juice bar", "salad bar"),
-    food_types = c("Mediterranean", "sushi", "poke", "vegetarian"),
-    pos_sequences = c("ADJ NOUN", "NOUN ADP NOUN")
-  ),
-  
-  # Moderate
-  moderate = list(
-    # Cultural cuisine indicators
-    cuisine = c("taste of", "le peep", "rice xpress", "new orleans", "italian", "mexican", "thai"),
-    # Restaurant types
-    types = c("bistro", "cafe", "kitchen", "restaurant"),
-    pos_sequences = c("PROPN PART NOUN", "NOUN ADP PROPN")
-  ),
-  
-  # Location/Context Needed
-  location = list(
-    unigrams = c("texas", "dallas", "plano", "medical"),
-    bigrams = c("medical ctr", "on main", "at the", "in the"),
-    pos_sequences = c("PROPN ADP PROPN", "NOUN ADP PROPN")
-  )
-)
-
-# Function to classify restaurants based on patterns
-classify_restaurant <- function(name, pos_sequence) {
-  name_lower <- tolower(name)
-  
-  # Check business entities first
-  if(any(str_detect(name_lower, paste(restaurant_patterns$business$unigrams, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$business$bigrams, collapse="|"))) ||
-     pos_sequence %in% restaurant_patterns$business$pos_sequences) {
-    return("needs_verification")
-  }
-  
-  # Check unhealthy indicators
-  if(any(str_detect(name_lower, paste(restaurant_patterns$unhealthy$bigrams, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$unhealthy$cooking, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$unhealthy$food_types, collapse="|")))) {
-    return("unhealthy")
-  }
-  
-  # Check healthy indicators
-  if(any(str_detect(name_lower, paste(restaurant_patterns$healthy$unigrams, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$healthy$bigrams, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$healthy$food_types, collapse="|")))) {
-    return("healthy")
-  }
-  
-  # Check moderate indicators
-  if(any(str_detect(name_lower, paste(restaurant_patterns$moderate$cuisine, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$moderate$types, collapse="|")))) {
-    return("moderately_healthy")
-  }
-  
-  # Check location/context
-  if(any(str_detect(name_lower, paste(restaurant_patterns$location$unigrams, collapse="|"))) ||
-     any(str_detect(name_lower, paste(restaurant_patterns$location$bigrams, collapse="|"))) ||
-     pos_sequence %in% restaurant_patterns$location$pos_sequences) {
-    return("needs_location_context")
-  }
-  
-  return("needs_manual_review")
-}
-
-# Apply classification
-classify_establishments <- function(data, pos_data) {
-  data %>%
-    mutate(
-      pos_sequence = pos_data$parsed %>%
-        group_by(doc_id) %>%
-        summarise(pos_seq = paste(pos, collapse = " ")) %>%
-        pull(pos_seq),
-      classification = map2_chr(`Company Name`, pos_sequence, classify_restaurant)
-    )
-}
-
-# Test the classification
-verification_classified <- classify_establishments(verification_needed, verification_pos)
-manual_review_classified <- classify_establishments(manual_review_needed, manual_review_pos)
-
-# Print results
-print("\nClassification Results:")
-print("Verification Needed:")
-print(verification_classified %>% count(classification, sort = TRUE))
-print("\nManual Review Needed:")
-print(manual_review_classified %>% count(classification, sort = TRUE))
-
-# Create refined classification patterns based on actual data
-refined_patterns <- list(
-  # Business entities requiring verification
-  business_entities = list(
-    tokens = c("inc", "llc", "corp", "enterprises", "group", "management", 
-               "holdings", "solutions", "franchise", "entertainment", "industries"),
-    bigrams = c("enterprises inc", "foods inc", "food inc", "yum brands",
-                "brands inc", "butler franchise", "franchise inc", "holdings llc",
-                "foods llc", "cec entertainment"),
-    trigrams = c("yum brands inc", "butler franchise inc", "cec entertainment inc")
-  ),
-  
-  # Restaurant types
-  restaurant_types = list(
-    casual_dining = c(
-      "taste of", "bar grill", "kitchen", "cafe", "bistro", "diner",
-      "restaurant", "eatery", "cantina", "dining"
-    ),
-    fast_food = c(
-      "express", "fast", "quick", "drive", "thru", "to go"
-    ),
-    specialty = c(
-      "bakery", "pizzeria", "steakhouse", "bbq", "bar b q", "barbecue",
-      "sushi", "pho", "taqueria"
-    )
-  ),
-  
-  # Cuisine indicators
-  cuisine_types = list(
-    asian = c(
-      "chinese", "japanese", "thai", "vietnamese", "korean", "asian",
-      "sushi", "pho", "wok", "rice", "noodle"
-    ),
-    mexican = c(
-      "mexican", "tex mex", "taqueria", "taco", "cantina", "casa",
-      "dos", "tres", "el", "la", "los", "las"
-    ),
-    italian = c(
-      "italian", "pizzeria", "pasta", "pizza", "ristorante"
-    ),
-    american = c(
-      "grill", "bar", "burger", "steak", "bbq", "bar b q", "wings",
-      "american", "diner"
-    ),
-    other = c(
-      "mediterranean", "greek", "indian", "cajun", "brazilian",
-      "european", "french", "german"
-    )
-  ),
-  
-  # Food type indicators
-  food_types = list(
-    proteins = c(
-      "burger", "steak", "chicken", "beef", "fish", "seafood",
-      "wings", "bbq", "bar b q"
-    ),
-    specialty_items = c(
-      "pizza", "sushi", "pho", "tacos", "pasta", "noodles",
-      "rice", "sandwich", "salad"
-    )
-  ),
-  
-  # Location/Context
-  location = list(
-    places = c("texas", "dallas", "plano", "fort worth", "richardson", "irving"),
-    contexts = c("mall", "center", "plaza", "square", "street", "avenue", "medical")
-  )
-)
-
-# Function to classify based on refined patterns
-classify_restaurant_refined <- function(name, tokens, bigrams, trigrams) {
-  name_lower <- tolower(name)
-  
-  # Helper function to check pattern matches
-  check_patterns <- function(text, patterns) {
-    any(sapply(patterns, function(p) str_detect(text, fixed(p))))
-  }
-  
-  # Check business entities first
-  if(check_patterns(name_lower, refined_patterns$business_entities$tokens) ||
-     check_patterns(name_lower, refined_patterns$business_entities$bigrams) ||
-     check_patterns(name_lower, refined_patterns$business_entities$trigrams)) {
-    return("needs_verification")
-  }
-  
-  # Check restaurant types
-  restaurant_type <- case_when(
-    check_patterns(name_lower, refined_patterns$restaurant_types$fast_food) ~ "fast_food",
-    check_patterns(name_lower, refined_patterns$restaurant_types$casual_dining) ~ "casual_dining",
-    check_patterns(name_lower, refined_patterns$restaurant_types$specialty) ~ "specialty",
-    TRUE ~ NA_character_
-  )
-  
-  # Check cuisine type
-  cuisine_type <- case_when(
-    check_patterns(name_lower, refined_patterns$cuisine_types$asian) ~ "asian",
-    check_patterns(name_lower, refined_patterns$cuisine_types$mexican) ~ "mexican",
-    check_patterns(name_lower, refined_patterns$cuisine_types$italian) ~ "italian",
-    check_patterns(name_lower, refined_patterns$cuisine_types$american) ~ "american",
-    check_patterns(name_lower, refined_patterns$cuisine_types$other) ~ "other",
-    TRUE ~ NA_character_
-  )
-  
-  # Determine health classification based on restaurant and cuisine type
-  if(!is.na(restaurant_type) || !is.na(cuisine_type)) {
-    return(case_when(
-      restaurant_type == "fast_food" ~ "unhealthy",
-      restaurant_type == "casual_dining" && cuisine_type %in% c("asian", "other") ~ "moderately_healthy",
-      cuisine_type %in% c("asian", "other") ~ "moderately_healthy",
-      cuisine_type %in% c("mexican", "italian", "american") ~ "moderately_unhealthy",
-      TRUE ~ "needs_manual_review"
-    ))
-  }
-  
-  # Check location context
-  if(check_patterns(name_lower, refined_patterns$location$places) ||
-     check_patterns(name_lower, refined_patterns$location$contexts)) {
-    return("needs_location_context")
-  }
-  
-  return("needs_manual_review")
-}
-
-# Apply refined classification
-apply_refined_classification <- function(data) {
-  data %>%
-    mutate(
-      classification = map_chr(`Company Name`, 
-                               ~classify_restaurant_refined(., tokens, bigrams, trigrams))
-    )
-}
-
-# Test refined classification
-verification_refined <- apply_refined_classification(verification_needed)
-manual_review_refined <- apply_refined_classification(manual_review_needed)
-
-# Print results
-print("\nRefined Classification Results:")
-print("Verification Needed:")
-print(verification_refined %>% count(classification, sort = TRUE))
-print("\nManual Review Needed:")
-print(manual_review_refined %>% count(classification, sort = TRUE))
-
-## Last NLP Classification----
-# Combine NLP insights with our original patterns for a more comprehensive classification system
-final_classification_patterns <- list(
-  # Business entities identified through NLP analysis of verification cases
-  business_entities = list(
-    # Top frequent individual business-related words
-    tokens = unique(c(
-      verification_ngrams$unigrams$term[1:10],  # Most common business tokens from verification cases
-      refined_patterns$business_entities$tokens  # Our original business tokens
-    )),
-    # Common two-word business combinations
-    bigrams = unique(c(
-      gsub("_", " ", verification_ngrams$bigrams$term[1:10]),  # Convert NLP bigrams to space-separated
-      refined_patterns$business_entities$bigrams  # Our original business bigrams
-    )),
-    # Three-word business patterns
-    trigrams = unique(c(
-      gsub("_", " ", verification_ngrams$trigrams$term[1:10]),  # Convert NLP trigrams to space-separated
-      refined_patterns$business_entities$trigrams  # Our original business trigrams
-    ))
-  ),
-  
-  # Restaurant and cuisine patterns from manual review analysis
-  restaurant_patterns = list(
-    # Individual restaurant-related words
-    tokens = unique(c(
-      manual_review_ngrams$unigrams$term[1:20],  # Most common restaurant terms
-      unlist(refined_patterns$restaurant_types)   # Our original restaurant type patterns
-    )),
-    # Two-word restaurant/cuisine combinations
-    bigrams = unique(c(
-      gsub("_", " ", manual_review_ngrams$bigrams$term[1:20]),  # Common restaurant word pairs
-      unlist(refined_patterns$cuisine_types)  # Our original cuisine patterns
-    ))
-  )
-)
-
-# Update refined_classification with NLP-enhanced classifications
-refined_classification <- refined_classification %>%
-  mutate(
-    final_category = case_when(
-      # Preserve existing classifications that aren't under review
-      final_category != "needs_manual_review" & 
-        final_category != "needs_verification" ~ final_category,
-      
-      # Check for business entities using NLP-derived patterns
-      # Match against single words
-      str_detect(tolower(`Company Name`), 
-                 paste(final_classification_patterns$business_entities$tokens, collapse="|")) |
-        # Match against two-word combinations
-        str_detect(tolower(`Company Name`), 
-                   paste(final_classification_patterns$business_entities$bigrams, collapse="|")) |
-        # Match against three-word combinations
-        str_detect(tolower(`Company Name`), 
-                   paste(final_classification_patterns$business_entities$trigrams, collapse="|")) 
-      ~ "needs_verification",
-      
-      # Apply restaurant type and cuisine patterns for health classification
-      
-      # Fast food indicators suggest unhealthy
-      str_detect(tolower(`Company Name`), 
-                 paste(refined_patterns$restaurant_types$fast_food, collapse="|")) ~ "unhealthy",
-      
-      # Asian and other international cuisines tend to be moderately healthy
-      str_detect(tolower(`Company Name`), 
-                 paste(refined_patterns$cuisine_types$asian, collapse="|")) |
-        str_detect(tolower(`Company Name`), 
-                   paste(refined_patterns$cuisine_types$other, collapse="|")) ~ "moderately_healthy",
-      
-      # Mexican, Italian, and American cuisines tend to be moderately unhealthy
-      str_detect(tolower(`Company Name`), 
-                 paste(refined_patterns$cuisine_types$mexican, collapse="|")) |
-        str_detect(tolower(`Company Name`), 
-                   paste(refined_patterns$cuisine_types$italian, collapse="|")) |
-        str_detect(tolower(`Company Name`), 
-                   paste(refined_patterns$cuisine_types$american, collapse="|")) ~ "moderately_unhealthy",
-      
-      # If no patterns match, keep the existing classification
-      TRUE ~ final_category
-    )
-  )
-
-# Generate summary statistics of the updated classifications
-updated_stats <- refined_classification %>%
-  group_by(final_category) %>%
-  summarise(
-    # Count occurrences of each category
-    count = n(),
-    # Calculate percentage of total
-    percentage = round(n() / nrow(refined_classification) * 100, 2),
-    # Show example establishments for each category
-    sample_names = paste(head(unique(`Company Name`), 3), collapse = "; ")
-  ) %>%
-  arrange(desc(count))  # Sort by frequency
-
-# Display results
-print("Updated Classification Distribution:")
-print(updated_stats)
-
-# Show examples of how establishments were classified
-print("\nSample of Updated Classifications:")
-refined_classification %>%
-  group_by(final_category) %>%
-  slice_head(n = 3) %>%  # Take first 3 examples from each category
-  select(`Company Name`, final_category) %>%
-  arrange(final_category) %>%
-  print(n = Inf)
+print("Current Classification Summary:")
+print(classification_summary)
