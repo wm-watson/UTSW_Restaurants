@@ -1163,3 +1163,55 @@ classification_summary <- dataaxle %>%
 
 print("Current Classification Summary:")
 print(classification_summary)
+
+removed_classifications <- dataaxle %>%
+  filter(food_health_status == "flag_for_potential_removal") %>%
+  select(
+    primary_naics_description,
+    primary_sic_description,
+    naics_1_description,
+    naics_2_description,
+    naics_3_description,
+    sic_code_1_description,
+    sic_code_2_description,
+    sic_code_3_description
+  ) %>%
+  summarise(
+    across(everything(), ~n_distinct(., na.rm = TRUE))
+  )
+
+# Get unique descriptions
+unique_naics <- dataaxle %>%
+  filter(food_health_status == "flag_for_potential_removal") %>%
+  select(
+    primary_naics_description,
+    naics_1_description,
+    naics_2_description,
+    naics_3_description
+  ) %>%
+  gather(key, value) %>%
+  filter(!is.na(value)) %>%
+  distinct(value) %>%
+  arrange(value)
+
+unique_sic <- dataaxle %>%
+  filter(food_health_status == "flag_for_potential_removal") %>%
+  select(
+    primary_sic_description,
+    sic_code_1_description,
+    sic_code_2_description,
+    sic_code_3_description
+  ) %>%
+  gather(key, value) %>%
+  filter(!is.na(value)) %>%
+  distinct(value) %>%
+  arrange(value)
+
+print("Number of unique classifications in flagged records:")
+print(removed_classifications)
+
+print("\nUnique NAICS descriptions:")
+print(unique_naics)
+
+print("\nUnique SIC descriptions:")
+print(unique_sic)
